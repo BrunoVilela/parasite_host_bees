@@ -230,7 +230,7 @@ pdf_table(
   data_source_table,
   "Input data sources.",
   font_size = 8,
-  widths = c("3.4cm", "4.6cm", "6.4cm")
+  widths = c("3.4cm", "5.2cm", "5.4cm")
 )
 ```
 
