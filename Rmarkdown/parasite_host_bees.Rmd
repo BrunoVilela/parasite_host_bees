@@ -1,0 +1,1185 @@
+---
+title: "Supplementary methods and results: parasite-host niche overlap"
+author: "Prof. Dr. Bruno Vilela - UFBA | IBio"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+    fig_caption: true
+    highlight: tango
+fontsize: 10pt
+geometry: margin=0.75in
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{array}
+  - \usepackage{pdflscape}
+  - \usepackage{float}
+  - \usepackage{xurl}
+  - \usepackage{fvextra}
+  - \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,commandchars=\\\{\}}
+  - \RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines,breakanywhere}
+  - \setlength{\emergencystretch}{3em}
+editor_options:
+  chunk_output_type: console
+tags:
+- Niche overlap
+- Broennimann 2012
+- Orchid bees
+- Parasite-host interactions
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  fig.width = 7,
+  fig.height = 5,
+  fig.pos = "H",
+  out.width = "95%",
+  size = "scriptsize"
+)
+options(knitr.kable.NA = "", width = 88)
+```
+
+# Scope
+
+This supplement documents environmental niche comparisons between cleptoparasitic bee species and host bee species. The analyses follow the environmental-space framework of Broennimann et al. (2012), using PCA-calibrated environmental space, gridded niche densities, Schoener's D, Warren's I, and niche dynamics categories implemented in `ecospat`.
+
+The purpose of this document is to provide supplementary methods and results. Computational reproducibility is addressed through modular project scripts, cached intermediate objects, a `targets` pipeline scaffold, and an RStudio Project file that defines the project root for relative paths.
+
+# Analysis Setup
+
+The project is designed to be opened through the included RStudio Project file before analyses are run. All relative paths are resolved from the project root. The main directories are `Data/` for occurrence data, `Scripts/` for analysis functions and workflow scripts, `Rmarkdown/` for this supplement, `Figures/` for figure outputs, and `Results/` for analytical tables, validation reports, and reproducibility files.
+
+The implementation uses `ecospat` for environmental niche comparison, `terra` and `sf` for spatial data processing, `ggplot2` for figures, `future`, `future.apply`, and `furrr` for parallel-ready randomization infrastructure, and `targets` for reproducible workflow orchestration. Package installation is not performed during rendering; missing dependencies cause rendering to stop.
+
+```{r package-requirements-code, eval=FALSE, echo=TRUE}
+# Required analytical and reporting packages.
+required_packages <- c(
+  "ade4", "colorspace", "dplyr", "ecospat", "future", "future.apply",
+  "furrr", "geodata", "ggplot2", "ggrepel", "kableExtra", "knitr",
+  "patchwork", "purrr", "raster", "readr", "readxl", "rmarkdown",
+  "rnaturalearth", "scales", "sessioninfo", "sf", "stringr", "targets",
+  "tarchetypes", "terra", "tibble", "tidyr", "viridisLite"
+)
+
+missing_packages <- setdiff(required_packages, rownames(installed.packages()))
+if (length(missing_packages) > 0) {
+  stop("Install missing packages before rendering: ",
+       paste(missing_packages, collapse = ", "))
+}
+invisible(lapply(required_packages, library, character.only = TRUE))
+```
+
+```{r packages}
+required_packages <- c(
+  "ade4", "colorspace", "dplyr", "ecospat", "future", "future.apply",
+  "furrr", "geodata", "ggplot2", "ggrepel", "kableExtra", "knitr",
+  "patchwork", "purrr", "raster", "readr", "readxl", "rmarkdown",
+  "rnaturalearth", "scales", "sessioninfo", "sf", "stringr", "targets",
+  "tarchetypes", "terra", "tibble", "tidyr", "viridisLite"
+)
+
+missing_packages <- setdiff(required_packages, rownames(installed.packages()))
+if (length(missing_packages) > 0) {
+  stop(
+    "Missing required R packages: ",
+    paste(missing_packages, collapse = ", "),
+    ". Install these packages before rendering the supplement.",
+    call. = FALSE
+  )
+}
+invisible(lapply(required_packages, library, character.only = TRUE))
+```
+
+```{r project-setup}
+project_dir <- normalizePath(".", mustWork = TRUE)
+is_project_root <- function(path) {
+  dir.exists(file.path(path, "Data")) &&
+    dir.exists(file.path(path, "Rmarkdown")) &&
+    length(Sys.glob(file.path(path, "*.Rproj"))) > 0
+}
+if (!is_project_root(project_dir) && is_project_root(normalizePath("..", mustWork = TRUE))) {
+  project_dir <- normalizePath("..", mustWork = TRUE)
+}
+if (!is_project_root(project_dir)) {
+  stop(
+    "Render this document from the RStudio Project root. Open the .Rproj file before running analyses.",
+    call. = FALSE
+  )
+}
+knitr::opts_knit$set(root.dir = project_dir)
+
+source(file.path(project_dir, "Scripts", "functions", "niche_overlap_functions.R"))
+source(file.path(project_dir, "Scripts", "functions", "cache_helpers.R"))
+source(file.path(project_dir, "Scripts", "functions", "table_helpers.R"))
+source(file.path(project_dir, "Scripts", "analysis", "run_workflow.R"))
+create_output_dirs(project_dir)
+
+figure_dir <- file.path(project_dir, "Figures")
+tables_dir <- file.path(project_dir, "Results", "tables")
+validation_dir <- file.path(project_dir, "Results", "validation")
+```
+
+# Data, Settings, and Pair Definition
+
+Occurrence records in `Data/occurrences_bees_parasite_host.csv` had undergone prior taxonomic verification and curation before this workflow. The validation steps reported here are an additional analytical screening stage focused on fields required for environmental niche comparison. Records failing validation were excluded from analyses, and complete validation logs were exported to `Results/validation/`.
+
+If `Data/parasite_host_pairs.csv` is present, analyses are restricted to the curated parasite-host pairs in that file. If that file is absent, the workflow explores all possible parasite-host species combinations represented in the occurrence dataset. In the latter case, results should be interpreted as exploratory environmental niche comparisons and do not necessarily represent confirmed ecological interactions.
+
+```{r workflow-settings-code, eval=FALSE, echo=TRUE}
+# Workflow settings used for this supplementary render.
+workflow_settings <- list(
+  occurrence_file = file.path("Data", "occurrences_bees_parasite_host.csv"),
+  pair_file = file.path("Data", "parasite_host_pairs.csv"),
+  minimum_occurrences = 5,
+  buffer_degrees = 2,
+  worldclim_resolution = 10,
+  grid_resolution = 100,
+  run_randomization_tests = FALSE,
+  test_repetitions = 0,
+  random_seed = 42,
+  future_workers = 1,
+  future_strategy = "multisession"
+)
+```
+
+```{r data-loading-code, eval=FALSE, echo=TRUE}
+# Data loading and environmental data acquisition.
+raw_occurrences <- read_occurrence_file(workflow_settings$occurrence_file)
+validation <- validate_occurrence_data(
+  raw_occurrences,
+  min_occ = workflow_settings$minimum_occurrences,
+  validation_dir = file.path("Results", "validation")
+)
+variables <- load_worldclim_bioclim(
+  project_dir = ".",
+  resolution = workflow_settings$worldclim_resolution
+)
+```
+
+```{r settings-reported-objects-code, eval=FALSE, echo=TRUE}
+# Objects summarized in the following tables.
+settings_report
+data_source_table
+```
+
+```{r settings, echo=FALSE}
+workflow_settings <- list(
+  occurrence_file = file.path(project_dir, "Data", "occurrences_bees_parasite_host.csv"),
+  pair_file = file.path(project_dir, "Data", "parasite_host_pairs.csv"),
+  minimum_occurrences = 5,
+  buffer_degrees = 2,
+  worldclim_resolution = 10,
+  grid_resolution = 100,
+  run_randomization_tests = FALSE,
+  test_repetitions = 0,
+  random_seed = 42,
+  future_workers = 1,
+  future_strategy = "multisession"
+)
+
+settings_report <- tibble::tibble(
+  Parameter = c(
+    "Minimum cleaned occurrences",
+    "Accessible-area buffer",
+    "WorldClim resolution",
+    "PCA grid resolution",
+    "Randomization tests",
+    "Test repetitions",
+    "Random seed",
+    "Parallel workers"
+  ),
+  Value = c(
+    workflow_settings$minimum_occurrences,
+    paste(workflow_settings$buffer_degrees, "decimal degrees"),
+    paste(workflow_settings$worldclim_resolution, "arc-min"),
+    workflow_settings$grid_resolution,
+    workflow_settings$run_randomization_tests,
+    workflow_settings$test_repetitions,
+    workflow_settings$random_seed,
+    workflow_settings$future_workers
+  )
+)
+
+data_source_table <- tibble::tibble(
+  Item = c("Occurrence data", "Optional pair definition", "Environmental data"),
+  Source = c(
+    "Data/occurrences_bees_parasite_host.csv",
+    "Data/parasite_host_pairs.csv",
+    "WorldClim 2.1 current bioclimatic variables"
+  ),
+  Use = c(
+    "Species identity, interaction category, coordinates, and collection year",
+    "Curated parasite-host pairs when available",
+    "Environmental predictors used to calibrate PCA niche space"
+  )
+)
+
+pdf_table(
+  settings_report,
+  "Analysis settings.",
+  font_size = 8,
+  widths = c("5.4cm", "4.6cm")
+)
+pdf_table(
+  data_source_table,
+  "Input data sources.",
+  font_size = 8,
+  widths = c("3.4cm", "4.6cm", "6.4cm")
+)
+```
+
+```{r workflow-execution-code, eval=FALSE, echo=TRUE}
+# Complete workflow execution from the project root.
+workflow <- run_niche_overlap_workflow(
+  project_dir = ".",
+  settings = workflow_settings,
+  use_cache = TRUE
+)
+
+validation <- workflow$validation
+pairs <- workflow$pairs
+env_space <- workflow$env_space
+pca_results <- workflow$pca_results
+test_results <- workflow$test_results
+figures <- workflow$figures
+```
+
+```{r run-workflow}
+workflow <- run_niche_overlap_workflow(
+  project_dir = project_dir,
+  settings = workflow_settings,
+  use_cache = TRUE
+)
+
+validation <- workflow$validation
+pairs <- workflow$pairs
+env_space <- workflow$env_space
+pca_results <- workflow$pca_results
+test_results <- workflow$test_results
+figures <- workflow$figures
+```
+
+# Analytical Definitions
+
+Niche overlap was calculated in the first two axes of PCA-calibrated environmental space. Let \(P_i\) be the corrected parasite niche density and \(H_i\) be the corrected host niche density in grid cell \(i\). Schoener's D was calculated as
+
+\[
+D = 1 - \frac{1}{2}\sum_i |P_i - H_i|.
+\]
+
+Warren's I was calculated as
+
+\[
+I = 1 - \frac{1}{2}\sum_i \left(\sqrt{P_i} - \sqrt{H_i}\right)^2.
+\]
+
+Both indices range from 0 to 1. A value of 0 indicates no environmental overlap, whereas a value of 1 indicates identical environmental occupancy in the calibrated niche space.
+
+For niche dynamics, the host niche was treated as the reference niche and the parasite niche as the focal niche. The categories returned by `ecospat.niche.dyn.index()` were expressed in parasite-host terminology. Shared parasite-host environment corresponds to stability in the original framework and indicates the proportion of parasite density occurring in environmental conditions also occupied by the host. Parasite-exclusive environment corresponds to expansion and indicates the proportion of parasite density outside host-occupied environmental conditions. Host environment unfilled by parasite corresponds to unfilling and indicates the proportion of host density not occupied by the parasite.
+
+Niche equivalency and niche similarity tests are implemented as randomization procedures. Equivalency tests compare observed overlap with null expectations generated by pooling and reallocating occurrences. Similarity tests compare observed relationships with null expectations constrained by the available environmental background. These procedures were not executed during rendering.
+
+# Occurrence Validation
+
+The additional validation stage checked required fields, interaction labels, coordinate format, coordinate ranges, duplicate species-interaction-coordinate records, and minimum cleaned occurrences per species. Records failing validation were excluded from environmental extraction and pairwise comparisons. Complete record-level validation outputs were written to `Results/validation/validation_report.csv`.
+
+```{r occurrence-validation-code, eval=FALSE, echo=TRUE}
+# Occurrence validation logic.
+required <- c("ID", "Species", "Interaction", "Longitude", "Latitude", "Year_collect")
+missing_cols <- setdiff(required, names(raw_occurrences))
+if (length(missing_cols) > 0) {
+  stop("Occurrence data are missing required columns: ",
+       paste(missing_cols, collapse = ", "))
+}
+
+prepared <- raw_occurrences |>
+  dplyr::mutate(
+    Species = stringr::str_squish(as.character(.data$Species)),
+    Interaction = tolower(stringr::str_squish(as.character(.data$Interaction))),
+    Longitude = parse_numeric_column(.data$Longitude),
+    Latitude = parse_numeric_column(.data$Latitude),
+    Year_collect = parse_numeric_column(.data$Year_collect)
+  )
+
+clean_occurrences <- prepared |>
+  dplyr::filter(
+    .data$Interaction %in% c("host", "parasite"),
+    !is.na(.data$Species),
+    !is.na(.data$Longitude),
+    !is.na(.data$Latitude),
+    dplyr::between(.data$Longitude, -180, 180),
+    dplyr::between(.data$Latitude, -90, 90)
+  ) |>
+  dplyr::distinct(.data$Species, .data$Interaction,
+                  round(.data$Longitude, 6), round(.data$Latitude, 6),
+                  .keep_all = TRUE)
+
+species_summary <- clean_occurrences |>
+  dplyr::count(.data$Interaction, .data$Species, name = "clean_records") |>
+  dplyr::mutate(
+    analysis_status = dplyr::if_else(
+      .data$clean_records >= workflow_settings$minimum_occurrences,
+      "eligible",
+      "below_minimum_records"
+    )
+  )
+```
+
+```{r validation-reported-objects-code, eval=FALSE, echo=TRUE}
+# Objects summarized in the following validation tables.
+validation_checks
+validation_issue_summary
+species_report
+```
+
+```{r validation-results, echo=FALSE}
+validation_checks <- validation$corrections |>
+  dplyr::transmute(
+    Check = dplyr::case_when(
+      .data$check == "delimiter_and_types" ~ "Delimiter and data types",
+      .data$check == "missing_or_non_numeric_coordinates" ~ "Missing or non-numeric coordinates",
+      .data$check == "coordinates_outside_valid_range" ~ "Coordinates outside valid range",
+      .data$check == "invalid_interaction_labels" ~ "Invalid interaction labels",
+      .data$check == "duplicate_species_interaction_coordinate" ~ "Duplicate species-coordinate records",
+      .data$check == "minimum_occurrence_threshold" ~ "Minimum occurrence threshold",
+      TRUE ~ .data$check
+    ),
+    Affected = .data$records_affected,
+    Action = wrap_table_text(.data$correction_applied, 70)
+  )
+
+species_report <- validation$species_summary |>
+  dplyr::transmute(
+    Interaction = .data$Interaction,
+    Species = species_label(.data$Species),
+    Raw = .data$raw_records,
+    Clean = .data$clean_records,
+    Duplicates = .data$duplicates_removed,
+    Removed = .data$invalid_or_missing_removed,
+    Status = dplyr::if_else(
+      .data$analysis_status == "below_minimum_records",
+      "below minimum",
+      .data$analysis_status
+    )
+  )
+
+validation_issue_summary <- validation$validation_report |>
+  dplyr::count(.data$validation_issue, name = "Records") |>
+  dplyr::mutate(
+    Issue = stringr::str_to_sentence(stringr::str_replace_all(.data$validation_issue, "_", " "))
+  ) |>
+  dplyr::select(Issue, Records)
+if (nrow(validation_issue_summary) == 0) {
+  validation_issue_summary <- tibble::tibble(Issue = "No record-level validation issues detected", Records = 0L)
+}
+
+pdf_table(
+  validation_checks,
+  "Validation checks and corrective actions.",
+  font_size = 7.2,
+  widths = c("4.0cm", "1.4cm", "9.2cm")
+)
+pdf_table(
+  validation_issue_summary,
+  "Record-level validation issue summary.",
+  font_size = 7.5,
+  widths = c("9.0cm", "2.0cm")
+)
+pdf_table(
+  species_report,
+  "Species-level occurrence counts after validation.",
+  font_size = 6.7,
+  longtable = TRUE,
+  widths = c("1.6cm", "4.0cm", "0.9cm", "0.9cm", "1.4cm", "1.1cm", "2.8cm")
+)
+```
+
+```{r fig-occurrences, fig.cap="Validated host and parasite occurrence records retained after coordinate screening and duplicate filtering. Colours and symbols distinguish interaction category; facets identify species.", fig.width=10, fig.height=8}
+figures$fig_occurrences
+```
+
+# Pair Definition and Environmental Data
+
+```{r pair-generation-code, eval=FALSE, echo=TRUE}
+# Parasite-host pair generation.
+parasite_counts <- species_summary |>
+  dplyr::filter(.data$Interaction == "parasite") |>
+  dplyr::select(parasite = Species, n_parasite = clean_records)
+host_counts <- species_summary |>
+  dplyr::filter(.data$Interaction == "host") |>
+  dplyr::select(host = Species, n_host = clean_records)
+
+if (file.exists(workflow_settings$pair_file)) {
+  raw_pairs <- read_occurrence_file(workflow_settings$pair_file)
+  candidate_pairs <- raw_pairs |>
+    dplyr::transmute(
+      parasite = gsub(" ", "_", stringr::str_squish(.data$parasite)),
+      host = gsub(" ", "_", stringr::str_squish(.data$host)),
+      pairing_rule = "user_supplied_pair_file"
+    ) |>
+    dplyr::distinct()
+} else {
+  parasite_species <- species_summary |>
+    dplyr::filter(.data$Interaction == "parasite") |>
+    dplyr::pull(.data$Species)
+  host_species <- species_summary |>
+    dplyr::filter(.data$Interaction == "host") |>
+    dplyr::pull(.data$Species)
+  candidate_pairs <- tidyr::expand_grid(
+    parasite = parasite_species,
+    host = host_species
+  ) |>
+    dplyr::mutate(pairing_rule = "all_candidate_parasite_host_combinations")
+}
+
+valid_pairs <- candidate_pairs |>
+  dplyr::left_join(parasite_counts, by = "parasite") |>
+  dplyr::left_join(host_counts, by = "host") |>
+  dplyr::filter(
+    .data$n_parasite >= workflow_settings$minimum_occurrences,
+    .data$n_host >= workflow_settings$minimum_occurrences
+  )
+```
+
+```{r environmental-extraction-code, eval=FALSE, echo=TRUE}
+# Species-specific accessible areas and environmental extraction.
+species_to_analyze <- unique(c(valid_pairs$parasite, valid_pairs$host))
+env_space <- prepare_environment_space(
+  clean_occ = validation$clean,
+  variables = variables,
+  species_to_analyze = species_to_analyze,
+  buffer_size = workflow_settings$buffer_degrees,
+  min_occ = workflow_settings$minimum_occurrences
+)
+
+pairs_environment <- filter_pairs_by_environment(
+  valid_pairs,
+  env_space$species_summary
+)
+```
+
+```{r pair-environment-reported-objects-code, eval=FALSE, echo=TRUE}
+# Objects summarized in the following pair and environment tables.
+pair_summary
+environment_report
+```
+
+```{r pair-environment-results, echo=FALSE}
+pairing_rule <- unique(pairs$all$pairing_rule)
+pairing_label <- if (length(pairing_rule) == 1 &&
+                     pairing_rule == "user_supplied_pair_file") {
+  "Curated pair file"
+} else {
+  "All possible parasite-host species combinations represented in the occurrence dataset"
+}
+
+pair_summary <- tibble::tibble(
+  Item = c(
+    "Candidate pairs",
+    "Valid analyzed pairs",
+    "Skipped pairs",
+    "Pairing source"
+  ),
+  Value = c(
+    nrow(pairs$all),
+    nrow(pairs$valid),
+    nrow(pairs$skipped),
+    wrap_table_text(pairing_label, 58)
+  )
+)
+
+environment_report <- env_space$species_summary |>
+  dplyr::transmute(
+    Species = .data$Species_display,
+    Occurrences = .data$occurrence_records_for_environment,
+    `Background cells` = .data$background_cells,
+    Status = .data$environmental_status
+  )
+
+pdf_table(
+  pair_summary,
+  "Parasite-host pair definition.",
+  font_size = 7.8,
+  widths = c("5.2cm", "7.4cm")
+)
+pdf_table(
+  environment_report,
+  "Environmental extraction and accessible-area background summary.",
+  font_size = 7.2,
+  longtable = TRUE,
+  widths = c("4.4cm", "2.2cm", "2.5cm", "4.6cm")
+)
+```
+
+Environmental availability was approximated separately for each species. Minimum convex polygons were constructed from validated occurrences, expanded by a two-degree buffer, and clipped to terrestrial environments. These accessible areas are operational approximations of available environments rather than definitive dispersal-accessible regions. This choice preserves compatibility with the original workflow while making the assumption explicit.
+
+```{r fig-backgrounds, fig.cap="Species-specific accessible-area backgrounds used for environmental extraction. Polygons were defined from minimum convex polygons around validated occurrences, expanded by a two-degree buffer, and clipped to land.", fig.width=10, fig.height=8}
+figures$fig_backgrounds
+```
+
+# Environmental PCA
+
+The environmental PCA was calibrated on accessible-area background environments and used to project occurrence records into a common two-dimensional environmental space. The first two axes summarize the dominant climatic gradients available to the analyzed host and parasite species.
+
+```{r pca-calibration-code, eval=FALSE, echo=TRUE}
+# PCA calibration in environmental space.
+all_spec_env <- dplyr::bind_rows(env_space$spec_env)
+all_back_env <- dplyr::bind_rows(env_space$back_env)
+data_env <- dplyr::bind_rows(all_spec_env, all_back_env)
+
+# Occurrences are projected into the PCA; background environments calibrate it.
+row_weights <- c(rep(0, nrow(all_spec_env)), rep(1, nrow(all_back_env)))
+pca <- ade4::dudi.pca(
+  data_env,
+  row.w = row_weights,
+  center = TRUE,
+  scale = TRUE,
+  scannf = FALSE,
+  nf = 2
+)
+
+pca_scores_occurrences <- pca$li[seq_len(nrow(all_spec_env)), 1:2]
+pca_scores_background <- pca$li[-seq_len(nrow(all_spec_env)), 1:2]
+pca_loadings <- pca$co[, 1:2]
+```
+
+```{r density-grid-code, eval=FALSE, echo=TRUE}
+# Broennimann et al. (2012) density grids in PCA environmental space.
+grids <- lapply(names(pca_results$scores_spec), function(sp_name) {
+  ecospat::ecospat.grid.clim.dyn(
+    glob = pca_results$total_scores_back,
+    glob1 = pca_results$scores_back[[sp_name]],
+    sp = pca_results$scores_spec[[sp_name]],
+    R = workflow_settings$grid_resolution
+  )
+})
+names(grids) <- names(pca_results$scores_spec)
+```
+
+```{r pca-reported-objects-code, eval=FALSE, echo=TRUE}
+# Objects summarized in the following PCA tables.
+pca_eigen_report
+pca_extreme_report
+pca_loading_report
+```
+
+```{r pca-results, echo=FALSE}
+bioclim_lookup <- tibble::tibble(
+  variable = paste0("bio", 1:19),
+  definition = c(
+    "Annual mean temperature",
+    "Mean diurnal range",
+    "Isothermality",
+    "Temperature seasonality",
+    "Maximum temperature of warmest month",
+    "Minimum temperature of coldest month",
+    "Temperature annual range",
+    "Mean temperature of wettest quarter",
+    "Mean temperature of driest quarter",
+    "Mean temperature of warmest quarter",
+    "Mean temperature of coldest quarter",
+    "Annual precipitation",
+    "Precipitation of wettest month",
+    "Precipitation of driest month",
+    "Precipitation seasonality",
+    "Precipitation of wettest quarter",
+    "Precipitation of driest quarter",
+    "Precipitation of warmest quarter",
+    "Precipitation of coldest quarter"
+  ),
+  domain = c(rep("temperature", 11), rep("precipitation", 8))
+)
+
+pca_eigen_report <- pca_results$eigenvalues |>
+  dplyr::slice_head(n = 5) |>
+  dplyr::transmute(
+    Axis = .data$axis,
+    Eigenvalue = .data$eigenvalue,
+    `Variance (%)` = .data$variance_percent
+  )
+
+pca_loading_report <- pca_results$loadings |>
+  dplyr::mutate(
+    absolute_contribution = sqrt(.data$axis1^2 + .data$axis2^2)
+  ) |>
+  dplyr::left_join(bioclim_lookup, by = "variable") |>
+  dplyr::arrange(dplyr::desc(.data$absolute_contribution)) |>
+  dplyr::transmute(
+    Variable = .data$variable,
+    Definition = wrap_table_text(.data$definition, 42),
+    PC1 = .data$axis1,
+    PC2 = .data$axis2,
+    `Absolute contribution` = .data$absolute_contribution
+  )
+
+axis_extremes <- function(loadings, lookup, axis, label) {
+  positive <- loadings |>
+    dplyr::arrange(dplyr::desc(.data[[axis]])) |>
+    dplyr::slice_head(n = 3) |>
+    dplyr::mutate(Direction = "Positive")
+  negative <- loadings |>
+    dplyr::arrange(.data[[axis]]) |>
+    dplyr::slice_head(n = 3) |>
+    dplyr::mutate(Direction = "Negative")
+  dplyr::bind_rows(positive, negative) |>
+    dplyr::left_join(lookup, by = "variable") |>
+    dplyr::transmute(
+      Axis = label,
+      Direction = .data$Direction,
+      Variable = .data$variable,
+      Definition = wrap_table_text(.data$definition, 40),
+      Loading = .data[[axis]]
+    )
+}
+
+pca_extreme_report <- dplyr::bind_rows(
+  axis_extremes(pca_results$loadings, bioclim_lookup, "axis1", "PC1"),
+  axis_extremes(pca_results$loadings, bioclim_lookup, "axis2", "PC2")
+)
+
+axis_summary <- function(loadings, lookup, axis, label) {
+  top_abs <- loadings |>
+    dplyr::mutate(abs_loading = abs(.data[[axis]])) |>
+    dplyr::slice_max(.data$abs_loading, n = 5, with_ties = FALSE) |>
+    dplyr::left_join(lookup, by = "variable")
+  dominant_domains <- top_abs |>
+    dplyr::count(.data$domain, sort = TRUE) |>
+    dplyr::pull(.data$domain)
+  positive <- top_abs |>
+    dplyr::filter(.data[[axis]] > 0) |>
+    dplyr::arrange(dplyr::desc(.data[[axis]])) |>
+    dplyr::pull(.data$variable) |>
+    paste(collapse = ", ")
+  negative <- top_abs |>
+    dplyr::filter(.data[[axis]] < 0) |>
+    dplyr::arrange(.data[[axis]]) |>
+    dplyr::pull(.data$variable) |>
+    paste(collapse = ", ")
+  paste0(
+    label, " was dominated by ",
+    paste(unique(dominant_domains), collapse = " and "),
+    " variables; positive loadings were strongest for ",
+    ifelse(positive == "", "none of the five strongest contributors", positive),
+    ", whereas negative loadings were strongest for ",
+    ifelse(negative == "", "none of the five strongest contributors", negative),
+    "."
+  )
+}
+
+pc1_interpretation <- axis_summary(pca_results$loadings, bioclim_lookup, "axis1", "PC1")
+pc2_interpretation <- axis_summary(pca_results$loadings, bioclim_lookup, "axis2", "PC2")
+
+pdf_table(
+  pca_eigen_report,
+  "First five PCA eigenvalues and variance explained.",
+  digits = 2,
+  font_size = 8
+)
+pdf_table(
+  pca_extreme_report,
+  "Strongest positive and negative PCA loadings.",
+  digits = 3,
+  font_size = 7,
+  widths = c("1.1cm", "1.8cm", "1.4cm", "6.8cm", "1.6cm")
+)
+pdf_table(
+  pca_loading_report,
+  "PCA loadings for the first two axes and combined absolute contribution.",
+  digits = 3,
+  font_size = 6.6,
+  longtable = TRUE,
+  widths = c("1.5cm", "6.8cm", "1.4cm", "1.4cm", "2.3cm")
+)
+```
+
+`r pc1_interpretation` `r pc2_interpretation` These axes therefore represent the main temperature and precipitation gradients structuring the environmental space used for niche comparison.
+
+```{r fig-pca-loadings, fig.cap="Loadings of WorldClim bioclimatic variables on the first two PCA axes used to define environmental niche space.", fig.width=7, fig.height=6}
+figures$fig_loadings
+```
+
+# Niche Overlap Metrics
+
+Schoener's D and Warren's I were calculated for each valid parasite-host pair. Larger values indicate greater similarity in environmental occupancy. In both metrics, 0 represents no overlap and 1 represents complete overlap in the calibrated environmental space.
+
+```{r overlap-calculation-code, eval=FALSE, echo=TRUE}
+# Pairwise niche overlap in environmental space.
+pair_metrics <- purrr::map_dfr(seq_len(nrow(pairs$valid)), function(i) {
+  pair <- pairs$valid[i, ]
+  z_parasite <- grids[[pair$parasite]]
+  z_host <- grids[[pair$host]]
+  overlap <- ecospat::ecospat.niche.overlap(z_parasite, z_host, cor = TRUE)
+
+  tibble::tibble(
+    pair_id = pair$pair_id,
+    parasite = pair$parasite,
+    host = pair$host,
+    schoener_d = unname(overlap[["D"]]),
+    warren_i = unname(overlap[["I"]])
+  )
+})
+```
+
+```{r overlap-reported-objects-code, eval=FALSE, echo=TRUE}
+# Objects summarized in the following overlap tables.
+overlap_report
+overlap_summary
+```
+
+```{r overlap-results, echo=FALSE}
+overlap_report <- test_results$metrics |>
+  dplyr::arrange(dplyr::desc(.data$schoener_d)) |>
+  dplyr::transmute(
+    Parasite = .data$parasite_label,
+    Host = .data$host_label,
+    `n parasite` = .data$n_parasite,
+    `n host` = .data$n_host,
+    `Schoener D` = .data$schoener_d,
+    `Warren I` = .data$warren_i
+  )
+
+highest_overlap <- test_results$metrics |>
+  dplyr::slice_max(.data$schoener_d, n = 1, with_ties = FALSE)
+lowest_overlap <- test_results$metrics |>
+  dplyr::slice_min(.data$schoener_d, n = 1, with_ties = FALSE)
+overlap_summary <- tibble::tibble(
+  Metric = c("Mean Schoener D", "Range Schoener D", "Mean Warren I", "Range Warren I"),
+  Value = c(
+    sprintf("%.3f", mean(test_results$metrics$schoener_d, na.rm = TRUE)),
+    sprintf(
+      "%.3f-%.3f",
+      min(test_results$metrics$schoener_d, na.rm = TRUE),
+      max(test_results$metrics$schoener_d, na.rm = TRUE)
+    ),
+    sprintf("%.3f", mean(test_results$metrics$warren_i, na.rm = TRUE)),
+    sprintf(
+      "%.3f-%.3f",
+      min(test_results$metrics$warren_i, na.rm = TRUE),
+      max(test_results$metrics$warren_i, na.rm = TRUE)
+    )
+  )
+)
+
+pdf_table(
+  overlap_report,
+  "Pairwise niche overlap metrics.",
+  digits = 3,
+  font_size = 6.8,
+  longtable = TRUE,
+  widths = c("3.3cm", "3.6cm", "1.4cm", "1.2cm", "1.6cm", "1.5cm")
+)
+pdf_table(
+  overlap_summary,
+  "Summary of niche overlap values.",
+  font_size = 8,
+  widths = c("4.5cm", "3.0cm")
+)
+```
+
+The highest Schoener's D was observed for *`r highest_overlap$parasite_label`* versus *`r highest_overlap$host_label`* (`r paste0("D = ", sprintf("%.3f", highest_overlap$schoener_d))`). The lowest Schoener's D was observed for *`r lowest_overlap$parasite_label`* versus *`r lowest_overlap$host_label`* (`r paste0("D = ", sprintf("%.3f", lowest_overlap$schoener_d))`). The observed range indicates substantial heterogeneity in environmental similarity across exploratory parasite-host comparisons.
+
+```{r fig-overlap, fig.cap="Pairwise Schoener's D values for all valid parasite-host comparisons. Darker colours indicate higher environmental niche overlap.", fig.width=8.5, fig.height=5.5}
+figures$fig_overlap
+```
+
+Randomization-based niche equivalency and similarity tests were retained in the workflow but were not executed for this render. For inferential runs outside document rendering, users should set `run_randomization_tests = TRUE`, choose the number of repetitions, configure `future_workers`, and run the workflow from the RStudio Project root. The configured `future` backend is used to distribute pairwise randomization procedures across available cores or nodes while preserving reproducibility through fixed seeds.
+
+```{r randomization-configuration-code, eval=FALSE, echo=TRUE}
+# Randomization configuration. These tests were not executed in this render.
+workflow_settings$run_randomization_tests <- FALSE
+workflow_settings$test_repetitions <- 0
+workflow_settings$random_seed <- 42
+workflow_settings$future_workers <- 1
+
+if (isTRUE(workflow_settings$run_randomization_tests) &&
+    workflow_settings$test_repetitions > 0) {
+  future::plan(workflow_settings$future_strategy,
+               workers = workflow_settings$future_workers)
+
+  equivalency <- ecospat::ecospat.niche.equivalency.test(
+    z_parasite,
+    z_host,
+    rep = workflow_settings$test_repetitions,
+    ncores = 1
+  )
+  similarity_parasite_to_host <- ecospat::ecospat.niche.similarity.test(
+    z_parasite,
+    z_host,
+    rep = workflow_settings$test_repetitions,
+    ncores = 1
+  )
+  similarity_host_to_parasite <- ecospat::ecospat.niche.similarity.test(
+    z_host,
+    z_parasite,
+    rep = workflow_settings$test_repetitions,
+    ncores = 1
+  )
+}
+```
+
+```{r randomization-reported-objects-code, eval=FALSE, echo=TRUE}
+# Object summarized in the following randomization-status table.
+randomization_report
+```
+
+```{r randomization-status, echo=FALSE}
+randomization_report <- tibble::tibble(
+  Test = c(
+    "Niche equivalency",
+    "Niche similarity: parasite to host",
+    "Niche similarity: host to parasite"
+  ),
+  Status = ifelse(workflow_settings$run_randomization_tests, "Run", "Not run in this render"),
+  Output = c(
+    "Results/tables/niche_equivalency_null_models.csv",
+    "Results/tables/niche_similarity_null_models.csv",
+    "Results/tables/niche_similarity_null_models.csv"
+  )
+)
+
+pdf_table(
+  randomization_report,
+  "Randomization test status.",
+  font_size = 7.2,
+  widths = c("4.6cm", "3.8cm", "6.2cm")
+)
+```
+
+# Parasite-Host Niche Dynamics
+
+Niche dynamics metrics were calculated with the host niche as the reference and the parasite niche as the focal niche. Shared parasite-host environment corresponds to stability, parasite-exclusive environment corresponds to expansion, and host environment unfilled by parasite corresponds to unfilling. In the parasite-host context, these terms describe environmental occupancy relationships and do not imply invasion history or temporal niche change.
+
+```{r niche-dynamics-code, eval=FALSE, echo=TRUE}
+# Niche dynamics with host as the reference and parasite as the focal niche.
+pair_dynamic_metrics <- purrr::map_dfr(seq_len(nrow(pairs$valid)), function(i) {
+  pair <- pairs$valid[i, ]
+  z_parasite <- grids[[pair$parasite]]
+  z_host <- grids[[pair$host]]
+
+  # ecospat labels are retained mathematically and relabeled biologically below.
+  dyn_host_reference <- ecospat::ecospat.niche.dyn.index(
+    z_host,
+    z_parasite
+  )$dynamic.index.w
+
+  tibble::tibble(
+    pair_id = pair$pair_id,
+    parasite_host_shared_stability = unname(dyn_host_reference[["stability"]]),
+    parasite_exclusive_environment_use = unname(dyn_host_reference[["expansion"]]),
+    host_environment_unfilled_by_parasite = unname(dyn_host_reference[["unfilling"]])
+  )
+})
+```
+
+```{r dynamics-reported-objects-code, eval=FALSE, echo=TRUE}
+# Objects summarized in the following niche-dynamics tables.
+dynamic_report
+niche_figure_report
+```
+
+```{r dynamics-results, echo=FALSE}
+dynamic_report <- test_results$metrics |>
+  dplyr::arrange(dplyr::desc(.data$schoener_d)) |>
+  dplyr::transmute(
+    Parasite = .data$parasite_label,
+    Host = .data$host_label,
+    `Shared environment (stability)` = .data$parasite_host_shared_stability,
+    `Parasite-exclusive environment (expansion)` = .data$parasite_exclusive_environment_use,
+    `Host unfilled environment (unfilling)` = .data$host_environment_unfilled_by_parasite
+  )
+
+highest_shared <- test_results$metrics |>
+  dplyr::slice_max(.data$parasite_host_shared_stability, n = 1, with_ties = FALSE)
+highest_exclusive <- test_results$metrics |>
+  dplyr::slice_max(.data$parasite_exclusive_environment_use, n = 1, with_ties = FALSE)
+highest_unfilled <- test_results$metrics |>
+  dplyr::slice_max(.data$host_environment_unfilled_by_parasite, n = 1, with_ties = FALSE)
+
+niche_figure_report <- figures$niche_dynamic$summary |>
+  dplyr::mutate(
+    Figure_filename = wrap_table_text(
+      stringr::str_replace_all(basename(.data$Figure_filename), "_", "_ "),
+      42
+    )
+  )
+
+pdf_table(
+  dynamic_report,
+  "Parasite-host niche dynamics metrics.",
+  digits = 3,
+  font_size = 6.7,
+  longtable = TRUE,
+  widths = c("3.2cm", "3.5cm", "2.4cm", "2.4cm", "2.6cm")
+)
+pdf_table(
+  niche_figure_report,
+  "Pair-specific niche-space figure index.",
+  digits = 3,
+  font_size = 6.8,
+  longtable = TRUE,
+  widths = c("3.2cm", "3.5cm", "1.0cm", "1.0cm", "6.0cm")
+)
+```
+
+The highest shared parasite-host environment was observed for *`r highest_shared$parasite_label`* versus *`r highest_shared$host_label`* (`r sprintf("%.3f", highest_shared$parasite_host_shared_stability)`). The highest parasite-exclusive environment was observed for *`r highest_exclusive$parasite_label`* versus *`r highest_exclusive$host_label`* (`r sprintf("%.3f", highest_exclusive$parasite_exclusive_environment_use)`). The highest host environment unfilled by parasite was observed for *`r highest_unfilled$parasite_label`* versus *`r highest_unfilled$host_label`* (`r sprintf("%.3f", highest_unfilled$host_environment_unfilled_by_parasite)`). These summaries identify parasite-host comparisons with the strongest environmental sharing, strongest parasite environmental exclusivity, and largest host environmental space not occupied by the parasite.
+
+```{r fig-dynamics-bars, fig.cap="Normalized visual partition of parasite-host niche dynamics components for each valid pair, sorted by Schoener's D. Exact unnormalized dynamics metrics are reported in the table.", fig.width=8.6, fig.height=9}
+figures$fig_dynamic_metrics
+```
+
+```{r fig-niche-space, fig.cap="Niche dynamics in PCA environmental space for the pair with the highest Schoener's D. Shared environments are shown in green, host-unfilled environments and host contours in blue, parasite-exclusive environments and parasite contours in orange, and non-analog environments in lighter corresponding colours.", fig.width=7.5, fig.height=6.5}
+figures$fig_top_dynamics
+```
+
+# Reproducibility and Output Files
+
+The workflow is reproducible from the RStudio Project root. Deterministic steps use fixed settings, randomization procedures are controlled by fixed seeds when enabled, and intermediate products are cached by analytical stage. Cache information is summarized without machine-specific paths.
+
+```{r caching-configuration-code, eval=FALSE, echo=TRUE}
+# Analytical stages cached by explicit input fingerprints.
+validation_cache <- cache_eval(
+  cache_dir = file.path("Results", "cache"),
+  name = "occurrence_cleaning",
+  key = list(
+    occurrence = input_fingerprint(workflow_settings$occurrence_file),
+    minimum_occurrences = workflow_settings$minimum_occurrences
+  ),
+  code = {
+    raw_occurrences <- read_occurrence_file(workflow_settings$occurrence_file)
+    validate_occurrence_data(raw_occurrences,
+                             min_occ = workflow_settings$minimum_occurrences,
+                             validation_dir = file.path("Results", "validation"))
+  },
+  use_cache = TRUE
+)
+
+cached_stages <- c(
+  "occurrence_cleaning",
+  "pair_definition",
+  "environmental_extraction_accessible_areas",
+  "environmental_pca",
+  "niche_density_grids",
+  "overlap_dynamics_randomization",
+  "figure_generation"
+)
+```
+
+```{r figure-generation-code, eval=FALSE, echo=TRUE}
+# Publication figures generated by the workflow.
+fig_occurrences <- plot_occurrence_map(validation$clean, env_space$world)
+fig_backgrounds <- plot_background_map(
+  env_space$background_polygons,
+  validation$clean,
+  env_space$world
+)
+fig_overlap <- plot_overlap_heatmap(test_results$metrics)
+fig_dynamic_metrics <- plot_dynamic_metrics_stacked_bar(test_results$metrics)
+fig_loadings <- plot_pca_loadings(pca_results$loadings, pca_results$eigenvalues)
+top_pair <- test_results$metrics |>
+  dplyr::slice_max(.data$schoener_d, n = 1, with_ties = FALSE)
+fig_top_dynamics <- plot_niche_dynamics_pair(top_pair, grids)
+
+save_ggplot_dual(fig_occurrences, file.path("Figures", "Figure1_cleaned_occurrences"),
+                 width = 10, height = 8)
+save_ggplot_dual(fig_backgrounds, file.path("Figures", "Figure2_accessible_area_backgrounds"),
+                 width = 10, height = 8)
+save_ggplot_dual(fig_overlap, file.path("Figures", "Figure3_schoener_d_heatmap"),
+                 width = 8.5, height = 5.5)
+save_ggplot_dual(fig_dynamic_metrics, file.path("Figures", "Figure4_niche_dynamics_metrics"),
+                 width = 8.6, height = 9.0)
+save_ggplot_dual(fig_top_dynamics, file.path("Figures", "Figure5_niche_dynamics_top_pair"),
+                 width = 7.5, height = 6.5)
+save_ggplot_dual(fig_loadings, file.path("Figures", "Figure6_pca_loadings"),
+                 width = 7, height = 6)
+save_niche_dynamic_plots(test_results$metrics, grids, "Figures")
+```
+
+```{r targets-configuration-code, eval=FALSE, echo=TRUE}
+# targets scaffold for full workflow execution.
+library(targets)
+library(tarchetypes)
+
+tar_option_set(
+  packages = c("ade4", "dplyr", "ecospat", "future", "future.apply",
+               "furrr", "geodata", "ggplot2", "sf", "terra", "tidyr")
+)
+
+list(
+  tar_target(workflow_settings, list(
+    minimum_occurrences = 5,
+    buffer_degrees = 2,
+    worldclim_resolution = 10,
+    grid_resolution = 100,
+    run_randomization_tests = FALSE,
+    test_repetitions = 0,
+    random_seed = 42,
+    future_workers = 1
+  )),
+  tar_target(
+    workflow_results,
+    run_niche_overlap_workflow(".", workflow_settings, use_cache = TRUE)
+  ),
+  tar_render(
+    supplementary_pdf,
+    "Rmarkdown/parasite_host_bees.Rmd",
+    output_file = "parasite_host_niche_overlap_supplement.pdf",
+    output_dir = "Results"
+  )
+)
+```
+
+```{r reproducibility-reported-objects-code, eval=FALSE, echo=TRUE}
+# Objects summarized in the following reproducibility tables.
+reproducibility_summary
+output_inventory
+cache_summary
+cache_stage_summary
+```
+
+```{r reproducibility-output, echo=FALSE}
+parasite_species <- validation$species_summary |>
+  dplyr::filter(.data$Interaction == "parasite", .data$analysis_status == "eligible") |>
+  dplyr::pull(.data$Species) |>
+  species_label()
+host_species <- validation$species_summary |>
+  dplyr::filter(.data$Interaction == "host", .data$analysis_status == "eligible") |>
+  dplyr::pull(.data$Species) |>
+  species_label()
+
+reproducibility_summary <- tibble::tibble(
+  Item = c(
+    "Parasite species analyzed",
+    "Host species analyzed",
+    "Valid pairwise comparisons",
+    "Environmental variables",
+    "Randomization status",
+    "Cache directory"
+  ),
+  Value = c(
+    length(parasite_species),
+    length(host_species),
+    nrow(pairs$valid),
+    "WorldClim bio1-bio19",
+    ifelse(workflow_settings$run_randomization_tests, "randomization tests run", "randomization tests not run"),
+    "Results/cache"
+  )
+)
+
+output_inventory <- tibble::tibble(
+  Output = c(
+    "Validation summaries",
+    "Overlap and niche dynamics tables",
+    "PCA scores and loadings",
+    "Publication figures",
+    "Pair-specific niche-space plots",
+    "Serialized analysis object",
+    "Session information"
+  ),
+  Location = c(
+    "Results/validation",
+    "Results/tables",
+    "Results/tables",
+    "Figures",
+    "Figures/Niche_Plots",
+    "Results/objects",
+    "Results/session_info.txt"
+  )
+)
+
+cache_summary <- workflow$cache_status |>
+  dplyr::count(.data$status, name = "Stages") |>
+  dplyr::transmute(Status = .data$status, Stages = .data$Stages)
+cache_stage_summary <- workflow$cache_status |>
+  dplyr::transmute(Stage = .data$stage, Status = .data$status)
+
+pdf_table(
+  reproducibility_summary,
+  "Reproducibility summary.",
+  font_size = 7.8,
+  widths = c("5.2cm", "7.2cm")
+)
+pdf_table(
+  output_inventory,
+  "Project output inventory.",
+  font_size = 7.8,
+  widths = c("5.2cm", "6.4cm")
+)
+pdf_table(
+  cache_summary,
+  "Cache summary.",
+  font_size = 8,
+  widths = c("4.0cm", "2.0cm")
+)
+pdf_table(
+  cache_stage_summary,
+  "Cache status by analytical stage.",
+  font_size = 7.2,
+  widths = c("6.8cm", "2.0cm")
+)
+```
+
+# Computational Environment
+
+```{r computational-environment-reported-object-code, eval=FALSE, echo=TRUE}
+# Object summarized in the following computational-environment table.
+session_report
+```
+
+```{r computational-environment, echo=FALSE}
+session_info_file <- file.path(project_dir, "Results", "session_info.txt")
+capture.output(sessioninfo::session_info(), file = session_info_file)
+
+pkg_version <- function(pkg) {
+  if (requireNamespace(pkg, quietly = TRUE)) {
+    as.character(utils::packageVersion(pkg))
+  } else {
+    "not installed"
+  }
+}
+
+session_report <- tibble::tibble(
+  Component = c(
+    "R", "OS", "ecospat", "terra", "raster", "ggplot2",
+    "future", "targets"
+  ),
+  Version = c(
+    R.version.string,
+    paste(Sys.info()[["sysname"]], Sys.info()[["release"]]),
+    pkg_version("ecospat"),
+    pkg_version("terra"),
+    pkg_version("raster"),
+    pkg_version("ggplot2"),
+    pkg_version("future"),
+    pkg_version("targets")
+  )
+)
+
+pdf_table(
+  session_report,
+  "Computational environment summary.",
+  font_size = 7.5,
+  widths = c("4.0cm", "9.8cm")
+)
+```
+
+Full session information was exported to `Results/session_info.txt`.
+
+# Code Availability
+
+All scripts, functions, workflow files, and rendering materials are available from the project repository: <https://github.com/BrunoVilela/parasite_host_bees>.
+
+The repository is organized as follows: `Data/` contains occurrence inputs and optional curated pair definitions; `Scripts/functions/` contains reusable analysis, plotting, table, and cache helpers; `Scripts/analysis/` contains the executable workflow wrapper; `Rmarkdown/` contains this supplementary document; `Figures/` contains generated figure outputs; and `Results/` contains generated tables, validation summaries, and reproducibility outputs. The project should be opened and executed through the included `.Rproj` file so that all relative paths resolve from the project root.
+
+# References
+
+Broennimann, O., Fitzpatrick, M. C., Pearman, P. B., Petitpierre, B., Pellissier, L., Yoccoz, N. G., Thuiller, W., Fortin, M.-J., Randin, C., Zimmermann, N. E., Graham, C. H., & Guisan, A. (2012). Measuring ecological niche overlap from occurrence and spatial environmental data. *Global Ecology and Biogeography*, 21(4), 481-497.
+
+Di Cola, V., Broennimann, O., Petitpierre, B., Breiner, F. T., D'Amen, M., Randin, C., Engler, R., Pottier, J., Pio, D., Dubuis, A., Pellissier, L., Mateo, R. G., Hordijk, W., Salamin, N., & Guisan, A. (2017). ecospat: an R package to support spatial analyses and modeling of species niches and distributions. *Ecography*, 40(6), 774-787.
+
+Silva, D. P., Varela, S., Nemesio, A., & De Marco, P. Jr. (2015). Adding biotic interactions into paleodistribution models: a host-cleptoparasite complex of Neotropical orchid bees. *PLOS ONE*, 10(6), e0129890. https://doi.org/10.1371/journal.pone.0129890
