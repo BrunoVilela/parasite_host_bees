@@ -567,7 +567,7 @@ names(grids) <- names(pca_results$scores_spec)
 ```{r pca-reported-objects-code, eval=FALSE, echo=TRUE}
 # Objects summarized in the following PCA tables.
 pca_eigen_report
-pca_extreme_report
+pca_loading_report
 ```
 
 ```{r pca-results, echo=FALSE}
@@ -607,42 +607,16 @@ pca_eigen_report <- pca_results$eigenvalues |>
 
 pca_loading_report <- pca_results$loadings |>
   dplyr::mutate(
-    absolute_contribution = sqrt(.data$axis1^2 + .data$axis2^2)
+    variable_order = readr::parse_number(.data$variable)
   ) |>
   dplyr::left_join(bioclim_lookup, by = "variable") |>
-  dplyr::arrange(dplyr::desc(.data$absolute_contribution)) |>
+  dplyr::arrange(.data$variable_order) |>
   dplyr::transmute(
     Variable = .data$variable,
     Definition = wrap_table_text(.data$definition, 42),
     PC1 = .data$axis1,
-    PC2 = .data$axis2,
-    `Absolute contribution` = .data$absolute_contribution
+    PC2 = .data$axis2
   )
-
-axis_extremes <- function(loadings, lookup, axis, label) {
-  positive <- loadings |>
-    dplyr::arrange(dplyr::desc(.data[[axis]])) |>
-    dplyr::slice_head(n = 3) |>
-    dplyr::mutate(Direction = "Positive")
-  negative <- loadings |>
-    dplyr::arrange(.data[[axis]]) |>
-    dplyr::slice_head(n = 3) |>
-    dplyr::mutate(Direction = "Negative")
-  dplyr::bind_rows(positive, negative) |>
-    dplyr::left_join(lookup, by = "variable") |>
-    dplyr::transmute(
-      Axis = label,
-      Direction = .data$Direction,
-      Variable = .data$variable,
-      Definition = wrap_table_text(.data$definition, 40),
-      Loading = .data[[axis]]
-    )
-}
-
-pca_extreme_report <- dplyr::bind_rows(
-  axis_extremes(pca_results$loadings, bioclim_lookup, "axis1", "PC1"),
-  axis_extremes(pca_results$loadings, bioclim_lookup, "axis2", "PC2")
-)
 
 pc1_variance <- pca_results$eigenvalues$variance_percent[[1]]
 pc2_variance <- pca_results$eigenvalues$variance_percent[[2]]
@@ -654,11 +628,12 @@ pdf_table(
   font_size = 8
 )
 pdf_table(
-  pca_extreme_report,
-  "Strongest positive and negative PCA loadings.",
+  pca_loading_report,
+  "PCA loadings for all WorldClim bioclimatic variables.",
   digits = 3,
   font_size = 7,
-  widths = c("1.1cm", "1.8cm", "1.4cm", "6.8cm", "1.6cm")
+  longtable = TRUE,
+  widths = c("1.4cm", "7.0cm", "1.6cm", "1.6cm")
 )
 ```
 
@@ -942,11 +917,11 @@ pdf_table(
 
 The highest shared parasite-host environment was observed for *`r highest_shared$parasite_label`* versus *`r highest_shared$host_label`* (`r sprintf("%.3f", highest_shared$parasite_host_shared_stability)`). The highest parasite-exclusive environment was observed for *`r highest_exclusive$parasite_label`* versus *`r highest_exclusive$host_label`* (`r sprintf("%.3f", highest_exclusive$parasite_exclusive_environment_use)`). The highest host environment unfilled by parasite was observed for *`r highest_unfilled$parasite_label`* versus *`r highest_unfilled$host_label`* (`r sprintf("%.3f", highest_unfilled$host_environment_unfilled_by_parasite)`). These summaries identify pairs with the strongest environmental sharing, the greatest parasite environmental exclusivity, and the largest portion of host environmental space not occupied by the parasite.
 
-```{r fig-dynamics-bars, fig.cap="Parasite-host niche dynamics metrics for each valid pair, sorted by Schoener's D. Values are shown on the original 0-1 scale and are not normalized across metrics.", fig.width=8.8, fig.height=8.6}
+```{r fig-dynamics-bars, fig.cap="Parasite-host niche dynamics metrics for each valid pair, sorted by Schoener's D. Values are shown on the original 0-1 scale and are not normalized across metrics.", fig.width=9.4, fig.height=8.6}
 figures$fig_dynamic_metrics
 ```
 
-```{r fig-niche-space, fig.cap="Niche dynamics in PCA environmental space for the pair with the highest Schoener's D. Filled cells show only dynamic occupancy categories; unclassified available background cells are left blank. Host and parasite outlines use solid lines for the full occupied niche support and dashed lines for the 50% density contour.", fig.width=7.5, fig.height=6.5}
+```{r fig-niche-space, fig.cap="Niche dynamics in PCA environmental space for the pair with the highest Schoener's D. Filled cells show only dynamic occupancy categories; unclassified available background cells are left blank. Host and parasite outlines use solid lines for species-specific background availability and dashed lines for the 50% occurrence-density contour.", fig.width=7.5, fig.height=6.5}
 figures$fig_top_dynamics
 ```
 
@@ -1005,7 +980,7 @@ save_ggplot_dual(fig_backgrounds, file.path("Figures", "Figure2_accessible_area_
 save_ggplot_dual(fig_overlap, file.path("Figures", "Figure3_schoener_d_heatmap"),
                  width = 8.5, height = 5.5)
 save_ggplot_dual(fig_dynamic_metrics, file.path("Figures", "Figure4_niche_dynamics_metrics"),
-                 width = 8.6, height = 9.0)
+                 width = 9.4, height = 9.0)
 save_ggplot_dual(fig_top_dynamics, file.path("Figures", "Figure5_niche_dynamics_top_pair"),
                  width = 7.5, height = 6.5)
 save_ggplot_dual(fig_loadings, file.path("Figures", "Figure6_pca_loadings"),

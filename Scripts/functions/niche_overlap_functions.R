@@ -1069,6 +1069,9 @@ plot_overlap_heatmap <- function(metrics) {
       limits = c(0, 1),
       name = "Schoener's D"
     ) +
+    ggplot2::scale_x_discrete(
+      labels = function(x) stringr::str_replace_all(x, " ", "\n")
+    ) +
     ggplot2::labs(
       x = "Host bee species",
       y = "Parasite species",
@@ -1076,8 +1079,8 @@ plot_overlap_heatmap <- function(metrics) {
     ) +
     theme_publication(base_size = 10) +
     ggplot2::theme(
-      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, face = "italic"),
-      axis.text.y = ggplot2::element_text(face = "italic"),
+      axis.text.x = ggplot2::element_text(face = "italic", size = 8, lineheight = 0.9),
+      axis.text.y = ggplot2::element_text(face = "italic", size = 8.5),
       panel.grid = ggplot2::element_blank()
     )
 }
@@ -1183,8 +1186,8 @@ plot_dynamic_metrics_dotplot <- function(metrics) {
     ggplot2::facet_wrap(ggplot2::vars(.data$metric_label), nrow = 1) +
     ggplot2::scale_x_continuous(
       limits = c(0, 1),
-      breaks = seq(0, 1, 0.25),
-      labels = scales::number_format(accuracy = 0.01),
+      breaks = c(0, 0.5, 1),
+      labels = c("0", "0.5", "1"),
       expand = ggplot2::expansion(mult = c(0, 0.02))
     ) +
     ggplot2::scale_colour_manual(
@@ -1203,8 +1206,10 @@ plot_dynamic_metrics_dotplot <- function(metrics) {
     ) +
     theme_publication(base_size = 8) +
     ggplot2::theme(
+      axis.text.x = ggplot2::element_text(size = 6.8),
       axis.text.y = ggplot2::element_text(face = "italic", size = 6.8),
       strip.text = ggplot2::element_text(face = "bold", size = 7.2),
+      panel.spacing.x = grid::unit(0.8, "lines"),
       panel.grid = ggplot2::element_blank()
     )
 }
@@ -1244,8 +1249,8 @@ plot_niche_dynamics_pair <- function(row, grids) {
     ) |>
     dplyr::filter(!is.na(.data$category_label))
 
-  host_contours <- niche_contour_df(z_host$z.uncor)
-  parasite_contours <- niche_contour_df(z_parasite$z.uncor)
+  host_contours <- niche_contour_df(z_host$Z, z_host$z.uncor)
+  parasite_contours <- niche_contour_df(z_parasite$Z, z_parasite$z.uncor)
   host_half_density <- half_density_break(host_contours$density)
   parasite_half_density <- half_density_break(parasite_contours$density)
 
@@ -1253,7 +1258,7 @@ plot_niche_dynamics_pair <- function(row, grids) {
     ggplot2::geom_tile(ggplot2::aes(fill = .data$category_label), alpha = 0.95) +
     ggplot2::geom_contour(
       data = host_contours,
-      ggplot2::aes(z = .data$available, colour = "Host", linetype = "Full occupied niche"),
+      ggplot2::aes(z = .data$available, colour = "Host", linetype = "Background availability"),
       breaks = 0.5,
       linewidth = 0.48
     ) +
@@ -1265,7 +1270,7 @@ plot_niche_dynamics_pair <- function(row, grids) {
     ) +
     ggplot2::geom_contour(
       data = parasite_contours,
-      ggplot2::aes(z = .data$available, colour = "Parasite", linetype = "Full occupied niche"),
+      ggplot2::aes(z = .data$available, colour = "Parasite", linetype = "Background availability"),
       breaks = 0.5,
       linewidth = 0.48
     ) +
@@ -1291,7 +1296,7 @@ plot_niche_dynamics_pair <- function(row, grids) {
       name = "Niche outline"
     ) +
     ggplot2::scale_linetype_manual(
-      values = c("Full occupied niche" = "solid", "50% density" = "22"),
+      values = c("Background availability" = "solid", "50% density" = "22"),
       name = "Contour"
     ) +
     ggplot2::coord_equal(expand = FALSE) +
@@ -1315,13 +1320,19 @@ plot_niche_dynamics_pair <- function(row, grids) {
     )
 }
 
-# Prepare a binary full occupied-niche surface and a density surface for the two
-# contour lines requested in pair-specific niche dynamics figures.
-niche_contour_df <- function(raster) {
-  raster_to_plot_df(raster, "density") |>
+# Prepare a binary background-availability surface and an occurrence-density
+# surface for the two contour lines requested in pair-specific niche dynamics
+# figures.
+niche_contour_df <- function(availability_raster, density_raster) {
+  availability <- raster_to_plot_df(availability_raster, "availability")
+  density <- raster_to_plot_df(density_raster, "density") |>
+    dplyr::select("x", "y", "density")
+
+  dplyr::left_join(availability, density, by = c("x", "y")) |>
     dplyr::mutate(
+      availability = tidyr::replace_na(.data$availability, 0),
       density = tidyr::replace_na(.data$density, 0),
-      available = as.integer(.data$density > 0)
+      available = as.integer(.data$availability > 0)
     )
 }
 
