@@ -72,7 +72,7 @@ Randomization outputs are written to `Results/tables/niche_equivalency_null_mode
 
 ## Niche dynamics figures
 
-The all-pairs niche dynamics figure displays stability, parasite-exclusive environment, and host-unfilled environment as separate 0-1 metrics; the values are not normalized to make every pair sum to 100%. Pair-specific niche dynamics figures use the host niche as the reference and the parasite niche as the focal niche. Filled cells show dynamic occupancy categories only; unclassified available background cells are left blank. Solid contours mark species-specific background availability and dashed contours mark the 50% occurrence-density contour for each species. Multiple density contour levels are intentionally not drawn.
+The all-pairs niche dynamics metric figure displays stability, parasite-exclusive environment, and host-unfilled environment as separate 0-1 metrics; the values are not normalized to make every pair sum to 100%. Pair-specific niche dynamics figures use the host niche as the reference and the parasite niche as the focal niche. Filled cells show dynamic occupancy categories only; unclassified available background cells are left blank. Solid contours mark species-specific background availability and dashed contours mark the 50% occurrence-density contour for each species. `Figures/Figure5_niche_dynamics_all_pairs.pdf` is a single faceted all-pairs niche-space figure with shared legends, and `Figures/Niche_Plots/` contains the individual pair plots. Multiple density contour levels are intentionally not drawn.
 
 ## GitHub remote
 

@@ -1219,12 +1219,23 @@ plot_dynamic_metrics_dotplot <- function(metrics) {
 plot_dynamic_metrics_stacked_bar <- plot_dynamic_metrics_dotplot
 plot_dynamic_metrics_heatmap <- plot_dynamic_metrics_dotplot
 
-# ggplot2 reconstruction of the ecospat dynamic-category map. The host is the
-# reference niche and the parasite is the focal niche.
-plot_niche_dynamics_pair <- function(row, grids) {
+niche_dynamic_category_values <- c(
+  "Shared environment" = "#1B9E77",
+  "Parasite-exclusive environment" = "#D95F02",
+  "Host unfilled by parasite" = "#1F78B4",
+  "Host-only non-analog" = "#D6EAF8",
+  "Parasite-only non-analog" = "#FDE0C5"
+)
+
+niche_dynamic_category_levels <- names(niche_dynamic_category_values)
+
+niche_dynamic_outline_values <- c("Host" = "#08519C", "Parasite" = "#E6550D")
+
+prepare_niche_dynamics_pair_data <- function(row, grids) {
   z_host <- grids[[row$host]]
   z_parasite <- grids[[row$parasite]]
   dynamic_raster <- ecospat::ecospat.niche.dyn.index(z_host, z_parasite)$dyn
+  pair_label <- paste(row$parasite_label, "x", row$host_label)
 
   dynamic_df <- raster_to_plot_df(dynamic_raster, "category") |>
     dplyr::mutate(
@@ -1238,23 +1249,67 @@ plot_niche_dynamics_pair <- function(row, grids) {
           .data$category == 5L ~ "Parasite-only non-analog",
           TRUE ~ NA_character_
         ),
-        levels = c(
-          "Shared environment",
-          "Parasite-exclusive environment",
-          "Host unfilled by parasite",
-          "Host-only non-analog",
-          "Parasite-only non-analog"
-        )
-      )
+        levels = niche_dynamic_category_levels
+      ),
+      pair_id = row$pair_id,
+      pair_label = pair_label
     ) |>
     dplyr::filter(!is.na(.data$category_label))
 
-  host_contours <- niche_contour_df(z_host$Z, z_host$z.uncor)
-  parasite_contours <- niche_contour_df(z_parasite$Z, z_parasite$z.uncor)
-  host_half_density <- half_density_break(host_contours$density)
-  parasite_half_density <- half_density_break(parasite_contours$density)
+  host_contours <- niche_contour_df(z_host$Z, z_host$z.uncor) |>
+    dplyr::mutate(species_role = "Host")
+  parasite_contours <- niche_contour_df(z_parasite$Z, z_parasite$z.uncor) |>
+    dplyr::mutate(species_role = "Parasite")
 
-  ggplot2::ggplot(dynamic_df, ggplot2::aes(x = .data$x, y = .data$y)) +
+  list(
+    dynamic = dynamic_df,
+    contours = dplyr::bind_rows(host_contours, parasite_contours) |>
+      dplyr::mutate(
+        pair_id = row$pair_id,
+        pair_label = pair_label,
+        species_role = factor(.data$species_role, levels = c("Host", "Parasite"))
+      ),
+    host_half_density = half_density_break(host_contours$density),
+    parasite_half_density = half_density_break(parasite_contours$density)
+  )
+}
+
+apply_niche_dynamics_scales <- function(plot) {
+  plot +
+    ggplot2::scale_fill_manual(
+      values = niche_dynamic_category_values,
+      breaks = niche_dynamic_category_levels,
+      drop = FALSE,
+      name = "Dynamic category"
+    ) +
+    ggplot2::scale_colour_manual(
+      values = niche_dynamic_outline_values,
+      breaks = names(niche_dynamic_outline_values),
+      drop = FALSE,
+      name = "Niche outline"
+    ) +
+    ggplot2::scale_linetype_manual(
+      values = c("Background availability" = "solid", "50% density" = "22"),
+      breaks = c("Background availability", "50% density"),
+      name = "Contour"
+    ) +
+    ggplot2::guides(
+      fill = ggplot2::guide_legend(order = 1, nrow = 2, byrow = TRUE),
+      colour = ggplot2::guide_legend(order = 2, nrow = 1),
+      linetype = ggplot2::guide_legend(order = 3, nrow = 1)
+    )
+}
+
+# ggplot2 reconstruction of the ecospat dynamic-category map. The host is the
+# reference niche and the parasite is the focal niche.
+plot_niche_dynamics_pair <- function(row, grids) {
+  plot_data <- prepare_niche_dynamics_pair_data(row, grids)
+  host_contours <- plot_data$contours |>
+    dplyr::filter(.data$species_role == "Host")
+  parasite_contours <- plot_data$contours |>
+    dplyr::filter(.data$species_role == "Parasite")
+
+  plot <- ggplot2::ggplot(plot_data$dynamic, ggplot2::aes(x = .data$x, y = .data$y)) +
     ggplot2::geom_tile(ggplot2::aes(fill = .data$category_label), alpha = 0.95) +
     ggplot2::geom_contour(
       data = host_contours,
@@ -1265,7 +1320,7 @@ plot_niche_dynamics_pair <- function(row, grids) {
     ggplot2::geom_contour(
       data = host_contours,
       ggplot2::aes(z = .data$density, colour = "Host", linetype = "50% density"),
-      breaks = host_half_density,
+      breaks = plot_data$host_half_density,
       linewidth = 0.48
     ) +
     ggplot2::geom_contour(
@@ -1277,27 +1332,8 @@ plot_niche_dynamics_pair <- function(row, grids) {
     ggplot2::geom_contour(
       data = parasite_contours,
       ggplot2::aes(z = .data$density, colour = "Parasite", linetype = "50% density"),
-      breaks = parasite_half_density,
+      breaks = plot_data$parasite_half_density,
       linewidth = 0.48
-    ) +
-    ggplot2::scale_fill_manual(
-      values = c(
-        "Shared environment" = "#1B9E77",
-        "Parasite-exclusive environment" = "#D95F02",
-        "Host unfilled by parasite" = "#1F78B4",
-        "Host-only non-analog" = "#D6EAF8",
-        "Parasite-only non-analog" = "#FDE0C5"
-      ),
-      drop = TRUE,
-      name = "Dynamic category"
-    ) +
-    ggplot2::scale_colour_manual(
-      values = c("Host" = "#08519C", "Parasite" = "#E6550D"),
-      name = "Niche outline"
-    ) +
-    ggplot2::scale_linetype_manual(
-      values = c("Background availability" = "solid", "50% density" = "22"),
-      name = "Contour"
     ) +
     ggplot2::coord_equal(expand = FALSE) +
     ggplot2::labs(
@@ -1316,8 +1352,76 @@ plot_niche_dynamics_pair <- function(row, grids) {
     ggplot2::theme(
       legend.position = "bottom",
       legend.box = "vertical",
+      legend.text = ggplot2::element_text(size = 7),
+      legend.title = ggplot2::element_text(size = 8, face = "bold"),
+      legend.key.height = grid::unit(0.35, "lines"),
+      legend.key.width = grid::unit(1.0, "lines"),
+      plot.margin = ggplot2::margin(5.5, 8, 8, 8),
       panel.grid = ggplot2::element_blank()
     )
+
+  apply_niche_dynamics_scales(plot)
+}
+
+plot_niche_dynamics_all_pairs <- function(metrics, grids) {
+  pair_order <- metrics |>
+    dplyr::arrange(dplyr::desc(.data$schoener_d)) |>
+    dplyr::pull(.data$pair_id)
+
+  prepared <- lapply(seq_len(nrow(metrics)), function(i) {
+    prepare_niche_dynamics_pair_data(metrics[i, ], grids)
+  })
+
+  dynamic_df <- dplyr::bind_rows(lapply(prepared, `[[`, "dynamic")) |>
+    dplyr::mutate(pair_id = factor(.data$pair_id, levels = pair_order))
+  contours <- dplyr::bind_rows(lapply(prepared, `[[`, "contours")) |>
+    dplyr::mutate(pair_id = factor(.data$pair_id, levels = pair_order))
+
+  density_contours <- contours |>
+    dplyr::group_by(.data$pair_id, .data$species_role) |>
+    dplyr::mutate(
+      max_density = max(.data$density, na.rm = TRUE),
+      density_scaled = dplyr::if_else(.data$max_density > 0, .data$density / .data$max_density, 0)
+    ) |>
+    dplyr::ungroup()
+
+  plot <- ggplot2::ggplot(dynamic_df, ggplot2::aes(x = .data$x, y = .data$y)) +
+    ggplot2::geom_tile(ggplot2::aes(fill = .data$category_label), alpha = 0.95) +
+    ggplot2::geom_contour(
+      data = contours,
+      ggplot2::aes(z = .data$available, colour = .data$species_role, linetype = "Background availability"),
+      breaks = 0.5,
+      linewidth = 0.26
+    ) +
+    ggplot2::geom_contour(
+      data = density_contours,
+      ggplot2::aes(z = .data$density_scaled, colour = .data$species_role, linetype = "50% density"),
+      breaks = 0.5,
+      linewidth = 0.24
+    ) +
+    ggplot2::facet_wrap(ggplot2::vars(.data$pair_label), ncol = 5) +
+    ggplot2::coord_equal(expand = FALSE) +
+    ggplot2::labs(
+      x = "PC1",
+      y = "PC2",
+      title = "Pair-specific parasite-host niche dynamics",
+      subtitle = "Each panel uses host as reference and parasite as focal niche"
+    ) +
+    theme_publication(base_size = 7.5) +
+    ggplot2::theme(
+      legend.position = "bottom",
+      legend.box = "vertical",
+      legend.text = ggplot2::element_text(size = 6.5),
+      legend.title = ggplot2::element_text(size = 7.5, face = "bold"),
+      axis.text = ggplot2::element_text(size = 5.5),
+      axis.title = ggplot2::element_text(size = 7),
+      strip.text = ggplot2::element_text(face = "italic", size = 6),
+      panel.grid = ggplot2::element_blank(),
+      panel.spacing = grid::unit(0.7, "lines"),
+      plot.margin = ggplot2::margin(5.5, 8, 8, 8)
+    )
+
+  apply_niche_dynamics_scales(plot)
 }
 
 # Prepare a binary background-availability surface and an occurrence-density
@@ -1351,12 +1455,9 @@ save_niche_dynamic_plots <- function(metrics, grids, figure_dir, tables_dir = NU
   niche_dir <- file.path(figure_dir, "Niche_Plots")
   dir.create(niche_dir, recursive = TRUE, showWarnings = FALSE)
 
-  multipage_pdf <- file.path(figure_dir, "Figure5_niche_dynamics_all_pairs.pdf")
-  grDevices::pdf(multipage_pdf, width = 7, height = 6.5, onefile = TRUE)
-  for (i in seq_len(nrow(metrics))) {
-    print(plot_niche_dynamics_pair(metrics[i, ], grids))
-  }
-  grDevices::dev.off()
+  all_pairs_plot <- plot_niche_dynamics_all_pairs(metrics, grids)
+  all_pairs_base <- file.path(figure_dir, "Figure5_niche_dynamics_all_pairs")
+  save_ggplot_dual(all_pairs_plot, all_pairs_base, width = 13.5, height = 15.5)
 
   for (i in seq_len(nrow(metrics))) {
     row <- metrics[i, ]
@@ -1365,15 +1466,15 @@ save_niche_dynamic_plots <- function(metrics, grids, figure_dir, tables_dir = NU
     ggplot2::ggsave(
       file.path(niche_dir, paste0(filename_base, ".pdf")),
       plot = plot,
-      width = 7,
-      height = 6.5,
+      width = 8.4,
+      height = 7.6,
       device = "pdf"
     )
     ggplot2::ggsave(
       file.path(niche_dir, paste0(filename_base, ".png")),
       plot = plot,
-      width = 7,
-      height = 6.5,
+      width = 8.4,
+      height = 7.6,
       dpi = 600
     )
   }
@@ -1397,7 +1498,12 @@ save_niche_dynamic_plots <- function(metrics, grids, figure_dir, tables_dir = NU
     readr::write_csv(figure_summary, file.path(tables_dir, "niche_space_figures.csv"))
   }
 
-  list(multipage_pdf = multipage_pdf, summary = figure_summary)
+  list(
+    all_pairs_pdf = paste0(all_pairs_base, ".pdf"),
+    all_pairs_tiff = paste0(all_pairs_base, ".tiff"),
+    faceted_plot = all_pairs_plot,
+    summary = figure_summary
+  )
 }
 
 # Write every reproducibility artifact requested by the project specification.

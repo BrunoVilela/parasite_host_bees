@@ -921,8 +921,12 @@ The highest shared parasite-host environment was observed for *`r highest_shared
 figures$fig_dynamic_metrics
 ```
 
-```{r fig-niche-space, fig.cap="Niche dynamics in PCA environmental space for the pair with the highest Schoener's D. Filled cells show only dynamic occupancy categories; unclassified available background cells are left blank. Host and parasite outlines use solid lines for species-specific background availability and dashed lines for the 50% occurrence-density contour.", fig.width=7.5, fig.height=6.5}
+```{r fig-niche-space, fig.cap="Niche dynamics in PCA environmental space for the pair with the highest Schoener's D. Filled cells show only dynamic occupancy categories; unclassified available background cells are left blank. Host and parasite outlines use solid lines for species-specific background availability and dashed lines for the 50% occurrence-density contour.", fig.width=8.4, fig.height=7.4}
 figures$fig_top_dynamics
+```
+
+```{r fig-niche-space-all, fig.cap="Faceted niche dynamics in PCA environmental space for all valid parasite-host comparisons. Panels share the same legend and use the same contour definitions as the pair-specific plots.", fig.width=11, fig.height=12}
+figures$fig_all_dynamics
 ```
 
 # Reproducibility and Output Files
@@ -982,10 +986,11 @@ save_ggplot_dual(fig_overlap, file.path("Figures", "Figure3_schoener_d_heatmap")
 save_ggplot_dual(fig_dynamic_metrics, file.path("Figures", "Figure4_niche_dynamics_metrics"),
                  width = 9.4, height = 9.0)
 save_ggplot_dual(fig_top_dynamics, file.path("Figures", "Figure5_niche_dynamics_top_pair"),
-                 width = 7.5, height = 6.5)
+                 width = 8.4, height = 7.6)
 save_ggplot_dual(fig_loadings, file.path("Figures", "Figure6_pca_loadings"),
                  width = 7, height = 6)
-save_niche_dynamic_plots(test_results$metrics, grids, "Figures")
+niche_dynamic <- save_niche_dynamic_plots(test_results$metrics, grids, "Figures")
+fig_all_dynamics <- niche_dynamic$faceted_plot
 ```
 
 ```{r targets-configuration-code, eval=FALSE, echo=TRUE}

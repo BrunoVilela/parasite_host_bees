@@ -225,7 +225,7 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
       cache_version = cache_version,
       pairs = test_results$metrics$pair_id,
       metrics = round(test_results$metrics$schoener_d, 8),
-      figure_version = 15L
+      figure_version = 16L
     ),
     code = {
       fig_occurrences <- plot_occurrence_map(validation$clean, env_space$world)
@@ -241,9 +241,10 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
       save_ggplot_dual(fig_backgrounds, file.path(figure_dir, "Figure2_accessible_area_backgrounds"), width = 10, height = 8)
       save_ggplot_dual(fig_overlap, file.path(figure_dir, "Figure3_schoener_d_heatmap"), width = 8.5, height = 5.5)
       save_ggplot_dual(fig_dynamic_metrics, file.path(figure_dir, "Figure4_niche_dynamics_metrics"), width = 9.4, height = 9.0)
-      save_ggplot_dual(fig_top_dynamics, file.path(figure_dir, "Figure5_niche_dynamics_top_pair"), width = 7.5, height = 6.5)
+      save_ggplot_dual(fig_top_dynamics, file.path(figure_dir, "Figure5_niche_dynamics_top_pair"), width = 8.4, height = 7.6)
       save_ggplot_dual(fig_loadings, file.path(figure_dir, "Figure6_pca_loadings"), width = 7, height = 6)
       niche_dynamic <- save_niche_dynamic_plots(test_results$metrics, grids, figure_dir, tables_dir = tables_dir)
+      fig_all_dynamics <- niche_dynamic$faceted_plot
 
       list(
         fig_occurrences = fig_occurrences,
@@ -251,6 +252,7 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
         fig_overlap = fig_overlap,
         fig_dynamic_metrics = fig_dynamic_metrics,
         fig_top_dynamics = fig_top_dynamics,
+        fig_all_dynamics = fig_all_dynamics,
         fig_loadings = fig_loadings,
         niche_dynamic = niche_dynamic
       )
