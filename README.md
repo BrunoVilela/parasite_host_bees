@@ -72,7 +72,7 @@ Randomization outputs are written to `Results/tables/niche_equivalency_null_mode
 
 ## Niche dynamics figures
 
-Pair-specific niche dynamics figures use the host niche as the reference and the parasite niche as the focal niche. Dynamic categories are shown in environmental space, with solid contours marking the full available niche and dashed contours marking the 50% density contour for each species. Multiple density contour levels are intentionally not drawn.
+The all-pairs niche dynamics figure displays stability, parasite-exclusive environment, and host-unfilled environment as separate 0-1 metrics; the values are not normalized to make every pair sum to 100%. Pair-specific niche dynamics figures use the host niche as the reference and the parasite niche as the focal niche. Filled cells show dynamic occupancy categories only; unclassified available background cells are left blank. Solid contours mark the full occupied niche support and dashed contours mark the 50% density contour for each species. Multiple density contour levels are intentionally not drawn.
 
 ## GitHub remote
 

@@ -604,6 +604,34 @@ filter_pairs_by_environment <- function(valid_pairs, env_species_summary) {
     )
 }
 
+# ecospat's internal p-value helper does not remove NA randomization replicates.
+# A few valid pairs can generate NA null values when a randomized density grid is
+# empty or degenerate. Use finite null replicates for p-values and report how
+# many repetitions were usable.
+randomization_p_value <- function(sim, obs, alternative = "higher") {
+  if (!alternative %in% c("higher", "lower", "different")) {
+    stop("alternative must be one of 'higher', 'lower', or 'different'.", call. = FALSE)
+  }
+  sim <- sim[is.finite(sim)]
+  if (!is.finite(obs) || length(sim) == 0) {
+    return(NA_real_)
+  }
+  if (alternative == "higher") {
+    return((sum(sim >= obs) + 1) / (length(sim) + 1))
+  }
+  if (alternative == "lower") {
+    return((sum(sim <= obs) + 1) / (length(sim) + 1))
+  }
+  2 * min(sum(sim >= obs) + 1, sum(sim <= obs) + 1) / (length(sim) + 1)
+}
+
+valid_randomization_repetitions <- function(df, columns = c("D", "I")) {
+  if (is.null(df) || nrow(df) == 0 || !all(columns %in% names(df))) {
+    return(NA_integer_)
+  }
+  sum(stats::complete.cases(df[, columns, drop = FALSE]))
+}
+
 # Calculate pairwise overlap metrics. Randomization tests are optional because
 # equivalency and similarity tests are computationally expensive for many pairs.
 run_pairwise_niche_tests <- function(valid_pairs, grids, repetitions = 100,
@@ -655,18 +683,24 @@ run_pairwise_niche_tests <- function(valid_pairs, grids, repetitions = 100,
           ncores = ecospat_cores
         )
 
-        equivalency_p_d <- equivalency$p.D
-        equivalency_p_i <- equivalency$p.I
-        similarity_p_d_ph <- similarity_ph$p.D
-        similarity_p_d_hp <- similarity_hp$p.D
-        similarity_p_i_ph <- similarity_ph$p.I
-        similarity_p_i_hp <- similarity_hp$p.I
+        equivalency_p_d <- randomization_p_value(equivalency$sim$D, overlap[["D"]])
+        equivalency_p_i <- randomization_p_value(equivalency$sim$I, overlap[["I"]])
+        similarity_p_d_ph <- randomization_p_value(similarity_ph$sim$D, overlap[["D"]])
+        similarity_p_d_hp <- randomization_p_value(similarity_hp$sim$D, overlap[["D"]])
+        similarity_p_i_ph <- randomization_p_value(similarity_ph$sim$I, overlap[["I"]])
+        similarity_p_i_hp <- randomization_p_value(similarity_hp$sim$I, overlap[["I"]])
+        equivalency_valid_repetitions <- valid_randomization_repetitions(equivalency$sim)
+        similarity_valid_repetitions_ph <- valid_randomization_repetitions(similarity_ph$sim)
+        similarity_valid_repetitions_hp <- valid_randomization_repetitions(similarity_hp$sim)
       } else {
         # Keep the output schema stable when randomization is disabled.
         equivalency <- similarity_ph <- similarity_hp <- NULL
         equivalency_p_d <- equivalency_p_i <- NA_real_
         similarity_p_d_ph <- similarity_p_d_hp <- NA_real_
         similarity_p_i_ph <- similarity_p_i_hp <- NA_real_
+        equivalency_valid_repetitions <- NA_integer_
+        similarity_valid_repetitions_ph <- NA_integer_
+        similarity_valid_repetitions_hp <- NA_integer_
       }
 
       metrics <- tibble::tibble(
@@ -686,6 +720,9 @@ run_pairwise_niche_tests <- function(valid_pairs, grids, repetitions = 100,
         similarity_p_d_host_to_parasite = similarity_p_d_hp,
         similarity_p_i_parasite_to_host = similarity_p_i_ph,
         similarity_p_i_host_to_parasite = similarity_p_i_hp,
+        equivalency_valid_repetitions = equivalency_valid_repetitions,
+        similarity_valid_repetitions_parasite_to_host = similarity_valid_repetitions_ph,
+        similarity_valid_repetitions_host_to_parasite = similarity_valid_repetitions_hp,
         # Parasite-host terminology. The host is the reference niche and the
         # parasite is the focal niche, matching ecospat's z1/reference and
         # z2/focal convention for dynamic indices.
@@ -802,6 +839,80 @@ run_pairwise_niche_tests <- function(valid_pairs, grids, repetitions = 100,
     similarity_null = similarity_null,
     errors = errors
   )
+}
+
+repair_randomization_metrics <- function(test_results) {
+  metrics <- test_results$metrics
+  if (is.null(metrics) || nrow(metrics) == 0) {
+    return(test_results)
+  }
+
+  needed_numeric <- c(
+    "equivalency_p_d",
+    "equivalency_p_i",
+    "similarity_p_d_parasite_to_host",
+    "similarity_p_d_host_to_parasite",
+    "similarity_p_i_parasite_to_host",
+    "similarity_p_i_host_to_parasite"
+  )
+  for (column in needed_numeric) {
+    if (!column %in% names(metrics)) {
+      metrics[[column]] <- NA_real_
+    }
+  }
+  needed_integer <- c(
+    "equivalency_valid_repetitions",
+    "similarity_valid_repetitions_parasite_to_host",
+    "similarity_valid_repetitions_host_to_parasite"
+  )
+  for (column in needed_integer) {
+    if (!column %in% names(metrics)) {
+      metrics[[column]] <- NA_integer_
+    }
+  }
+
+  equivalency_null <- test_results$equivalency_null
+  similarity_null <- test_results$similarity_null
+
+  for (i in seq_len(nrow(metrics))) {
+    pair_id <- metrics$pair_id[[i]]
+
+    if (!is.null(equivalency_null) && nrow(equivalency_null) > 0) {
+      eq <- equivalency_null[equivalency_null$pair_id == pair_id, , drop = FALSE]
+      if (nrow(eq) > 0) {
+        metrics$equivalency_p_d[[i]] <- randomization_p_value(eq$D, metrics$schoener_d[[i]])
+        metrics$equivalency_p_i[[i]] <- randomization_p_value(eq$I, metrics$warren_i[[i]])
+        metrics$equivalency_valid_repetitions[[i]] <- valid_randomization_repetitions(eq)
+      }
+    }
+
+    if (!is.null(similarity_null) && nrow(similarity_null) > 0) {
+      sim_ph <- similarity_null[
+        similarity_null$pair_id == pair_id & similarity_null$direction == "parasite_to_host",
+        ,
+        drop = FALSE
+      ]
+      if (nrow(sim_ph) > 0) {
+        metrics$similarity_p_d_parasite_to_host[[i]] <- randomization_p_value(sim_ph$D, metrics$schoener_d[[i]])
+        metrics$similarity_p_i_parasite_to_host[[i]] <- randomization_p_value(sim_ph$I, metrics$warren_i[[i]])
+        metrics$similarity_valid_repetitions_parasite_to_host[[i]] <- valid_randomization_repetitions(sim_ph)
+      }
+
+      sim_hp <- similarity_null[
+        similarity_null$pair_id == pair_id & similarity_null$direction == "host_to_parasite",
+        ,
+        drop = FALSE
+      ]
+      if (nrow(sim_hp) > 0) {
+        metrics$similarity_p_d_host_to_parasite[[i]] <- randomization_p_value(sim_hp$D, metrics$schoener_d[[i]])
+        metrics$similarity_p_i_host_to_parasite[[i]] <- randomization_p_value(sim_hp$I, metrics$warren_i[[i]])
+        metrics$similarity_valid_repetitions_host_to_parasite[[i]] <- valid_randomization_repetitions(sim_hp)
+      }
+    }
+  }
+
+  test_results$metrics <- metrics
+  test_results
 }
 
 # Shared ggplot theme for publication-oriented figures.
@@ -1033,55 +1144,23 @@ make_dynamic_metrics_long <- function(metrics) {
         .data$metric == "host_unfilled" ~ "Host environment unfilled by parasite",
         TRUE ~ .data$metric
       ),
-      pair_label = paste0(.data$parasite_label, " x ", .data$host_label)
-    )
-}
-
-# Prepare a normalized visual partition for Figure 4. The exact dynamic metrics
-# remain in the tables; this derived table rescales the three displayed
-# components so each stacked bar sums to one.
-make_dynamic_visual_partition <- function(metrics) {
-  metrics |>
-    dplyr::transmute(
-      pair_id = .data$pair_id,
-      pair_label = paste0(.data$parasite_label, " x ", .data$host_label),
-      schoener_d = .data$schoener_d,
-      shared = .data$parasite_host_shared_stability,
-      parasite_exclusive = .data$parasite_exclusive_environment_use,
-      host_unfilled = .data$host_environment_unfilled_by_parasite
-    ) |>
-    tidyr::pivot_longer(
-      cols = c("shared", "parasite_exclusive", "host_unfilled"),
-      names_to = "component",
-      values_to = "raw_value"
-    ) |>
-    dplyr::group_by(.data$pair_id) |>
-    dplyr::mutate(
-      component_sum = sum(.data$raw_value, na.rm = TRUE),
-      visual_value = dplyr::if_else(.data$component_sum > 0, .data$raw_value / .data$component_sum, NA_real_)
-    ) |>
-    dplyr::ungroup() |>
-    dplyr::mutate(
-      component_label = factor(
-        dplyr::case_when(
-          .data$component == "shared" ~ "Shared parasite-host environment",
-          .data$component == "parasite_exclusive" ~ "Parasite-exclusive environment",
-          .data$component == "host_unfilled" ~ "Host environment unfilled by parasite",
-          TRUE ~ .data$component
-        ),
+      metric_label = factor(
+        .data$metric_label,
         levels = c(
           "Shared parasite-host environment",
           "Parasite-exclusive environment",
           "Host environment unfilled by parasite"
         )
-      )
+      ),
+      pair_label = paste0(.data$parasite_label, " x ", .data$host_label)
     )
 }
 
-# Figure-level summary of the three parasite-host dynamic components. The plot is
-# a stacked-bar replacement for the earlier heatmap and is sorted by Schoener's D.
-plot_dynamic_metrics_stacked_bar <- function(metrics) {
-  dynamic_long <- make_dynamic_visual_partition(metrics)
+# Figure-level summary of the three parasite-host dynamic components. Values are
+# shown on their original 0-1 scale rather than normalized to a common total,
+# because unfilling is not part of the same denominator as stability/expansion.
+plot_dynamic_metrics_dotplot <- function(metrics) {
+  dynamic_long <- make_dynamic_metrics_long(metrics)
   pair_order <- metrics |>
     dplyr::arrange(dplyr::desc(.data$schoener_d)) |>
     dplyr::transmute(pair_label = paste0(.data$parasite_label, " x ", .data$host_label)) |>
@@ -1091,40 +1170,49 @@ plot_dynamic_metrics_stacked_bar <- function(metrics) {
     dynamic_long,
     ggplot2::aes(
       y = factor(.data$pair_label, levels = rev(pair_order)),
-      x = .data$visual_value,
-      fill = .data$component_label
+      x = .data$value,
+      colour = .data$metric_label
     )
   ) +
-    ggplot2::geom_col(width = 0.72, colour = "white", linewidth = 0.18) +
-    ggplot2::scale_x_continuous(
-      labels = scales::percent_format(accuracy = 1),
-      expand = ggplot2::expansion(mult = c(0, 0.01))
+    ggplot2::geom_segment(
+      ggplot2::aes(x = 0, xend = .data$value, yend = factor(.data$pair_label, levels = rev(pair_order))),
+      linewidth = 0.25,
+      alpha = 0.45
     ) +
-    ggplot2::scale_fill_manual(
+    ggplot2::geom_point(size = 1.7) +
+    ggplot2::facet_wrap(ggplot2::vars(.data$metric_label), nrow = 1) +
+    ggplot2::scale_x_continuous(
+      limits = c(0, 1),
+      breaks = seq(0, 1, 0.25),
+      labels = scales::number_format(accuracy = 0.01),
+      expand = ggplot2::expansion(mult = c(0, 0.02))
+    ) +
+    ggplot2::scale_colour_manual(
       values = c(
         "Shared parasite-host environment" = "#1B9E77",
         "Parasite-exclusive environment" = "#D95F02",
         "Host environment unfilled by parasite" = "#1F78B4"
       ),
-      name = "Component"
+      guide = "none"
     ) +
     ggplot2::labs(
-      x = "Normalized contribution to displayed dynamics components",
+      x = "Metric value",
       y = "Parasite-host pair",
-      title = "Parasite-host niche dynamics partition",
-      subtitle = "Pairs are sorted by Schoener's D; exact metric values are reported in tables"
+      title = "Parasite-host niche dynamics metrics",
+      subtitle = "Pairs are sorted by Schoener's D; values are not normalized across metrics"
     ) +
     theme_publication(base_size = 8) +
     ggplot2::theme(
       axis.text.y = ggplot2::element_text(face = "italic", size = 6.8),
-      legend.position = "bottom",
+      strip.text = ggplot2::element_text(face = "bold", size = 7.2),
       panel.grid = ggplot2::element_blank()
     )
 }
 
-# Backward-compatible alias for older reports that used the previous function
-# name before Figure 4 was changed from a heatmap to stacked bars.
-plot_dynamic_metrics_heatmap <- plot_dynamic_metrics_stacked_bar
+# Backward-compatible aliases for older reports that used previous function
+# names before the all-pairs dynamics plot was changed to an actual-value dot plot.
+plot_dynamic_metrics_stacked_bar <- plot_dynamic_metrics_dotplot
+plot_dynamic_metrics_heatmap <- plot_dynamic_metrics_dotplot
 
 # ggplot2 reconstruction of the ecospat dynamic-category map. The host is the
 # reference niche and the parasite is the focal niche.
@@ -1143,7 +1231,6 @@ plot_niche_dynamics_pair <- function(row, grids) {
           .data$category == 4L ~ "Parasite-exclusive environment",
           .data$category == 1L ~ "Host-only non-analog",
           .data$category == 5L ~ "Parasite-only non-analog",
-          .data$category == 6L ~ "Other available environment",
           TRUE ~ NA_character_
         ),
         levels = c(
@@ -1151,8 +1238,7 @@ plot_niche_dynamics_pair <- function(row, grids) {
           "Parasite-exclusive environment",
           "Host unfilled by parasite",
           "Host-only non-analog",
-          "Parasite-only non-analog",
-          "Other available environment"
+          "Parasite-only non-analog"
         )
       )
     ) |>
@@ -1167,7 +1253,7 @@ plot_niche_dynamics_pair <- function(row, grids) {
     ggplot2::geom_tile(ggplot2::aes(fill = .data$category_label), alpha = 0.95) +
     ggplot2::geom_contour(
       data = host_contours,
-      ggplot2::aes(z = .data$available, colour = "Host", linetype = "Full available niche"),
+      ggplot2::aes(z = .data$available, colour = "Host", linetype = "Full occupied niche"),
       breaks = 0.5,
       linewidth = 0.48
     ) +
@@ -1179,7 +1265,7 @@ plot_niche_dynamics_pair <- function(row, grids) {
     ) +
     ggplot2::geom_contour(
       data = parasite_contours,
-      ggplot2::aes(z = .data$available, colour = "Parasite", linetype = "Full available niche"),
+      ggplot2::aes(z = .data$available, colour = "Parasite", linetype = "Full occupied niche"),
       breaks = 0.5,
       linewidth = 0.48
     ) +
@@ -1195,8 +1281,7 @@ plot_niche_dynamics_pair <- function(row, grids) {
         "Parasite-exclusive environment" = "#D95F02",
         "Host unfilled by parasite" = "#1F78B4",
         "Host-only non-analog" = "#D6EAF8",
-        "Parasite-only non-analog" = "#FDE0C5",
-        "Other available environment" = "#F2F2F2"
+        "Parasite-only non-analog" = "#FDE0C5"
       ),
       drop = TRUE,
       name = "Dynamic category"
@@ -1206,7 +1291,7 @@ plot_niche_dynamics_pair <- function(row, grids) {
       name = "Niche outline"
     ) +
     ggplot2::scale_linetype_manual(
-      values = c("Full available niche" = "solid", "50% density" = "22"),
+      values = c("Full occupied niche" = "solid", "50% density" = "22"),
       name = "Contour"
     ) +
     ggplot2::coord_equal(expand = FALSE) +
@@ -1230,8 +1315,8 @@ plot_niche_dynamics_pair <- function(row, grids) {
     )
 }
 
-# Prepare a binary full-available-niche surface and a density surface for the
-# two contour lines requested in pair-specific niche dynamics figures.
+# Prepare a binary full occupied-niche surface and a density surface for the two
+# contour lines requested in pair-specific niche dynamics figures.
 niche_contour_df <- function(raster) {
   raster_to_plot_df(raster, "density") |>
     dplyr::mutate(
@@ -1349,38 +1434,4 @@ save_analysis_outputs <- function(project_dir, validation, pairs, env_space,
   }
 
   saveRDS(analysis_object, file.path(objects_dir, "niche_overlap_analysis.rds"))
-}
-
-# Save a compact log of implementation changes and assumptions.
-write_modification_log <- function(project_dir, run_settings, validation, pairs) {
-  path <- file.path(project_dir, "Results", "workflow_modifications.md")
-  lines <- c(
-    "# Workflow modifications",
-    "",
-    "- Replaced the previous three-group Oxytrigona workflow with an automated parasite-host workflow based on the `Interaction` column.",
-    "- Reads `Data/occurrences_bees_parasite_host.csv` as a semicolon-delimited file and parses coordinate fields robustly.",
-    "- Validates missing, non-numeric, out-of-range, and duplicate species-coordinate records before analysis.",
-    "- Uses all candidate parasite-host combinations that pass the minimum cleaned occurrence threshold unless `Data/parasite_host_pairs.csv` is supplied.",
-    "- Keeps the Broennimann et al. environmental PCA and ecospat density-grid approach, but automates it for all valid pairs.",
-    "- Adds parasite-host terminology for stability, parasite-exclusive environmental use, and host environmental space unfilled by the parasite.",
-    "- Enables randomization-based niche equivalency and directional niche similarity tests with fixed seeds and ecospat-level parallel workers.",
-    "- Revises pair-specific niche dynamics figures to use solid full-available-niche outlines and dashed 50% density contours rather than multiple density contour levels.",
-    "- Revises the supplementary PDF to expose reproducibility-relevant analytical code while hiding PDF table styling and other presentational infrastructure.",
-    "- Displays reported data objects before formatted tables so readers can identify the summarized objects without seeing table-formatting helper calls.",
-    "- Saves figures under `Figures/`, pair-specific niche-space plots under `Figures/Niche_Plots/`, analytical tables and null-model outputs under `Results/tables/`, validation outputs under `Results/validation/`, and R objects under `Results/objects/`.",
-    "- Produces publication-oriented occurrence maps, background maps, PCA loading plots, Schoener's D heatmaps, niche dynamics stacked bars, and pair-specific ggplot2 niche dynamics figures.",
-    "",
-    "## Key settings",
-    "",
-    paste0("- Minimum cleaned unique occurrences per species: ", run_settings$minimum_occurrences),
-    paste0("- MCP buffer size in decimal degrees: ", run_settings$buffer_degrees),
-    paste0("- Environmental grid resolution: ", run_settings$grid_resolution),
-    paste0("- Test repetitions: ", run_settings$test_repetitions),
-    paste0("- Randomization tests run: ", run_settings$run_randomization_tests),
-    paste0("- Candidate pairs: ", nrow(pairs$all)),
-    paste0("- Valid analyzed pairs: ", nrow(pairs$valid)),
-    paste0("- Occurrence issue records written: ", nrow(validation$issues))
-  )
-  writeLines(lines, path)
-  path
 }

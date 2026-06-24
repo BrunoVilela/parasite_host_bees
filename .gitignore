@@ -18,7 +18,6 @@ Results/*.pdf
 Results/*.tex
 Results/*.txt
 Results/**/*.rds
-!Results/workflow_modifications.md
 Results/tables/pca_scores_*.csv
 
 # Rendered figure artifacts

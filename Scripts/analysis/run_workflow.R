@@ -185,7 +185,7 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
     },
     use_cache = use_cache
   )
-  test_results <- test_cache$value
+  test_results <- repair_randomization_metrics(test_cache$value)
   cache_status[["overlap_dynamics_randomization"]] <- test_cache[c("status", "path")]
 
   run_settings <- tibble::tibble(
@@ -211,8 +211,6 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
     test_results = test_results,
     run_settings = run_settings
   )
-  modification_log <- write_modification_log(project_dir, run_settings, validation, pairs)
-
   expected_niche_files <- file.path(
     figure_dir,
     "Niche_Plots",
@@ -227,13 +225,13 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
       cache_version = cache_version,
       pairs = test_results$metrics$pair_id,
       metrics = round(test_results$metrics$schoener_d, 8),
-      figure_version = 11L
+      figure_version = 14L
     ),
     code = {
       fig_occurrences <- plot_occurrence_map(validation$clean, env_space$world)
       fig_backgrounds <- plot_background_map(env_space$background_polygons, validation$clean, env_space$world)
       fig_overlap <- plot_overlap_heatmap(test_results$metrics)
-      fig_dynamic_metrics <- plot_dynamic_metrics_stacked_bar(test_results$metrics)
+      fig_dynamic_metrics <- plot_dynamic_metrics_dotplot(test_results$metrics)
       fig_loadings <- plot_pca_loadings(pca_results$loadings, pca_results$eigenvalues)
       top_pair <- test_results$metrics |>
         dplyr::slice_max(.data$schoener_d, n = 1, with_ties = FALSE)
@@ -288,7 +286,6 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
     test_results = test_results,
     run_settings = run_settings,
     figures = figures,
-    cache_status = cache_status_table,
-    modification_log = modification_log
+    cache_status = cache_status_table
   )
 }
