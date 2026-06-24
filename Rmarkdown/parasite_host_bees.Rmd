@@ -53,7 +53,7 @@ The document is written to show the analytical decisions needed to reproduce the
 
 # Analysis Setup
 
-Begin by opening `Capitulo 2.Rproj`. The project root is then the working directory for all relative paths. Input data are read from `Data/`, reusable functions from `Scripts/`, this document from `Rmarkdown/`, figures are written to `Figures/`, and analytical outputs are written to `Results/`.
+Begin by opening `bee_parasites.Rproj`. The project root is then the working directory for all relative paths. Input data are read from `Data/`, reusable functions from `Scripts/`, this document from `Rmarkdown/`, figures are written to `Figures/`, and analytical outputs are written to `Results/`.
 
 The main analytical package is `ecospat`, which implements the Broennimann et al. environmental-space niche comparison functions. Spatial processing uses `terra` and `sf`; figures use `ggplot2`; randomization tests use `ecospat`'s internal randomization routines with reproducible seeds; and `_targets.R` provides a pipeline scaffold for rerunning the complete workflow. The document checks that required packages are installed and stops early if any are missing.
 

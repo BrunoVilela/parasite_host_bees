@@ -4,7 +4,7 @@ This project estimates environmental niche overlap between cleptoparasitic bee s
 
 ## RStudio Project use
 
-Open `Capitulo 2.Rproj` in RStudio before running analyses. The workflow assumes that the working directory is the project root defined by the `.Rproj` file, so all paths are relative to that root.
+Open `bee_parasites.Rproj` in RStudio before running analyses. The workflow assumes that the working directory is the project root defined by the `.Rproj` file, so all paths are relative to that root.
 
 ## Repository layout
 
