@@ -1,7 +1,7 @@
 # targets pipeline for the parasite-host niche overlap workflow.
 #
-# Randomization is disabled by default here. Increase test_repetitions and set
-# run_randomization_tests to TRUE only for the final inferential run.
+# Randomization is enabled by default here. Increase test_repetitions for
+# higher p-value resolution when running final inferential analyses.
 
 library(targets)
 library(tarchetypes)
@@ -28,10 +28,10 @@ list(
       buffer_degrees = 2,
       worldclim_resolution = 10,
       grid_resolution = 100,
-      run_randomization_tests = FALSE,
-      test_repetitions = 0,
+      run_randomization_tests = TRUE,
+      test_repetitions = 100,
       random_seed = 42,
-      future_workers = 1,
+      future_workers = 4,
       future_strategy = "multisession"
     )
   ),

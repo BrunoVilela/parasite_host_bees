@@ -28,7 +28,7 @@ Install the required R packages before rendering the supplement. The RMarkdown d
 
 ## Main workflow
 
-After opening the `.Rproj`, render the supplementary PDF without running randomization tests:
+After opening the `.Rproj`, render the supplementary PDF with randomization tests enabled:
 
 ```r
 rmarkdown::render(
@@ -47,15 +47,16 @@ source("Scripts/analysis/run_workflow.R")
 results <- run_niche_overlap_workflow(
   project_dir = getwd(),
   settings = list(
-    run_randomization_tests = FALSE,
-    test_repetitions = 0,
-    future_workers = 1
+    run_randomization_tests = TRUE,
+    test_repetitions = 100,
+    future_workers = 4,
+    future_strategy = "multisession"
   ),
   use_cache = TRUE
 )
 ```
 
-The `_targets.R` file provides a reproducible pipeline scaffold. It uses the same defaults and keeps randomization disabled until explicitly changed.
+The `_targets.R` file provides a reproducible pipeline scaffold using the same randomization defaults.
 
 ## Pair definitions
 
@@ -63,7 +64,15 @@ If `Data/parasite_host_pairs.csv` exists, the analysis is restricted to the cura
 
 ## Randomization tests
 
-Niche equivalency and similarity tests are implemented but disabled by default because they are computationally expensive. For a final inferential run, set `run_randomization_tests = TRUE`, choose a defensible number of repetitions, and configure `future_workers` and `future_strategy` according to available hardware. Run these analyses from the RStudio Project root so relative paths and caches resolve correctly.
+Niche equivalency and similarity tests are enabled by default with 100 repetitions, `random_seed = 42`, and four workers passed to each `ecospat` randomization test. The workflow runs one niche equivalency test and two directional niche similarity tests for each valid parasite-host pair. Pair-level `future` parallelization is used only for non-randomization runs because serialized `ecospat` grid objects can fail in separate R sessions during randomization.
+
+The 100-repetition setting provides a reproducible inferential run and p-value resolution of approximately 0.01. For final publication inference, consider increasing `test_repetitions` to 999 or more if computing time permits, then rerun the workflow from the RStudio Project root.
+
+Randomization outputs are written to `Results/tables/niche_equivalency_null_models.csv`, `Results/tables/niche_similarity_null_models.csv`, and `Results/tables/niche_overlap_metrics.csv`. These generated result files are ignored by git to keep the repository lightweight; they can be regenerated from the tracked code and input data.
+
+## Niche dynamics figures
+
+Pair-specific niche dynamics figures use the host niche as the reference and the parasite niche as the focal niche. Dynamic categories are shown in environmental space, with solid contours marking the full available niche and dashed contours marking the 50% density contour for each species. Multiple density contour levels are intentionally not drawn.
 
 ## GitHub remote
 

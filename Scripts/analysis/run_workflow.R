@@ -19,10 +19,10 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
     buffer_degrees = 2,
     worldclim_resolution = 10,
     grid_resolution = 100,
-    run_randomization_tests = FALSE,
-    test_repetitions = 0,
+    run_randomization_tests = TRUE,
+    test_repetitions = 100,
     random_seed = 42,
-    future_workers = 1,
+    future_workers = 4,
     future_strategy = "multisession"
   )
   settings <- utils::modifyList(defaults, as.list(settings))
@@ -35,7 +35,7 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
   validation_dir <- file.path(project_dir, "Results", "validation")
 
   cache_status <- list()
-  cache_version <- 4L
+  cache_version <- 5L
 
   validation_cache <- cache_eval(
     cache_dir = cache_dir,
@@ -227,7 +227,7 @@ run_niche_overlap_workflow <- function(project_dir, settings = list(), use_cache
       cache_version = cache_version,
       pairs = test_results$metrics$pair_id,
       metrics = round(test_results$metrics$schoener_d, 8),
-      figure_version = 8L
+      figure_version = 11L
     ),
     code = {
       fig_occurrences <- plot_occurrence_map(validation$clean, env_space$world)

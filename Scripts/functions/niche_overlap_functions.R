@@ -608,7 +608,7 @@ filter_pairs_by_environment <- function(valid_pairs, env_species_summary) {
 # equivalency and similarity tests are computationally expensive for many pairs.
 run_pairwise_niche_tests <- function(valid_pairs, grids, repetitions = 100,
                                      seed = 42, ncores = 1,
-                                     run_randomization_tests = FALSE,
+                                     run_randomization_tests = TRUE,
                                      future_strategy = "multisession") {
   ncores <- max(1L, as.integer(ncores))
   randomization_enabled <- isTRUE(run_randomization_tests) && repetitions > 0
@@ -634,11 +634,8 @@ run_pairwise_niche_tests <- function(valid_pairs, grids, repetitions = 100,
       dyn_hp <- ecospat::ecospat.niche.dyn.index(z_host, z_parasite)$dynamic.index.w
 
       if (randomization_enabled) {
-        # These three tests generate null distributions by randomization. They
-        # are skipped by default for exploratory/report rendering runs.
-        # When pairs are parallelized with future, ecospat itself is kept to one
-        # worker per pair to avoid nested parallel oversubscription.
-        ecospat_cores <- if (ncores > 1L) 1L else ncores
+        # These three tests generate null distributions by randomization.
+        ecospat_cores <- ncores
         equivalency <- ecospat::ecospat.niche.equivalency.test(
           z_parasite,
           z_host,
@@ -768,7 +765,8 @@ run_pairwise_niche_tests <- function(valid_pairs, grids, repetitions = 100,
   }
 
   pair_indices <- seq_len(nrow(valid_pairs))
-  parallelize_pairs <- ncores > 1L &&
+  parallelize_pairs <- !randomization_enabled &&
+    ncores > 1L &&
     requireNamespace("future", quietly = TRUE) &&
     requireNamespace("future.apply", quietly = TRUE)
 
@@ -785,11 +783,24 @@ run_pairwise_niche_tests <- function(valid_pairs, grids, repetitions = 100,
     pair_results <- lapply(pair_indices, analyze_pair)
   }
 
+  metrics <- dplyr::bind_rows(lapply(pair_results, `[[`, "metrics"))
+  equivalency_null <- dplyr::bind_rows(lapply(pair_results, `[[`, "equivalency_null"))
+  similarity_null <- dplyr::bind_rows(lapply(pair_results, `[[`, "similarity_null"))
+  errors <- dplyr::bind_rows(lapply(pair_results, `[[`, "errors"))
+
+  if (nrow(metrics) == 0 && nrow(errors) > 0) {
+    stop(
+      "All pairwise niche tests failed. First error: ",
+      errors$error_message[[1]],
+      call. = FALSE
+    )
+  }
+
   list(
-    metrics = dplyr::bind_rows(lapply(pair_results, `[[`, "metrics")),
-    equivalency_null = dplyr::bind_rows(lapply(pair_results, `[[`, "equivalency_null")),
-    similarity_null = dplyr::bind_rows(lapply(pair_results, `[[`, "similarity_null")),
-    errors = dplyr::bind_rows(lapply(pair_results, `[[`, "errors"))
+    metrics = metrics,
+    equivalency_null = equivalency_null,
+    similarity_null = similarity_null,
+    errors = errors
   )
 }
 
@@ -866,10 +877,6 @@ plot_occurrence_map <- function(clean_occ, world) {
       title = "Validated occurrence records"
     ) +
     theme_publication(base_size = 9.5) +
-    ggplot2::guides(
-      colour = ggplot2::guide_legend(override.aes = list(size = 3, alpha = 1)),
-      shape = ggplot2::guide_legend(override.aes = list(size = 3, alpha = 1))
-    ) +
     ggplot2::theme(
       legend.position = "bottom",
       legend.box = "horizontal",
@@ -927,10 +934,6 @@ plot_background_map <- function(background_polygons, clean_occ, world) {
       subtitle = "Minimum convex polygons buffered in degrees and clipped to land"
     ) +
     theme_publication(base_size = 9.5) +
-    ggplot2::guides(
-      colour = ggplot2::guide_legend(override.aes = list(size = 3, alpha = 1)),
-      shape = ggplot2::guide_legend(override.aes = list(size = 3, alpha = 1))
-    ) +
     ggplot2::theme(
       legend.position = "bottom",
       legend.box = "horizontal",
@@ -1155,26 +1158,36 @@ plot_niche_dynamics_pair <- function(row, grids) {
     ) |>
     dplyr::filter(!is.na(.data$category_label))
 
-  host_density <- raster_to_plot_df(z_host$z.uncor, "density") |>
-    dplyr::mutate(density = tidyr::replace_na(.data$density, 0))
-  parasite_density <- raster_to_plot_df(z_parasite$z.uncor, "density") |>
-    dplyr::mutate(density = tidyr::replace_na(.data$density, 0))
-  host_breaks <- density_contour_breaks(host_density$density)
-  parasite_breaks <- density_contour_breaks(parasite_density$density)
+  host_contours <- niche_contour_df(z_host$z.uncor)
+  parasite_contours <- niche_contour_df(z_parasite$z.uncor)
+  host_half_density <- half_density_break(host_contours$density)
+  parasite_half_density <- half_density_break(parasite_contours$density)
 
   ggplot2::ggplot(dynamic_df, ggplot2::aes(x = .data$x, y = .data$y)) +
     ggplot2::geom_tile(ggplot2::aes(fill = .data$category_label), alpha = 0.95) +
     ggplot2::geom_contour(
-      data = host_density,
-      ggplot2::aes(z = .data$density, colour = "Host niche density"),
-      breaks = host_breaks,
-      linewidth = 0.42
+      data = host_contours,
+      ggplot2::aes(z = .data$available, colour = "Host", linetype = "Full available niche"),
+      breaks = 0.5,
+      linewidth = 0.48
     ) +
     ggplot2::geom_contour(
-      data = parasite_density,
-      ggplot2::aes(z = .data$density, colour = "Parasite niche density"),
-      breaks = parasite_breaks,
-      linewidth = 0.42
+      data = host_contours,
+      ggplot2::aes(z = .data$density, colour = "Host", linetype = "50% density"),
+      breaks = host_half_density,
+      linewidth = 0.48
+    ) +
+    ggplot2::geom_contour(
+      data = parasite_contours,
+      ggplot2::aes(z = .data$available, colour = "Parasite", linetype = "Full available niche"),
+      breaks = 0.5,
+      linewidth = 0.48
+    ) +
+    ggplot2::geom_contour(
+      data = parasite_contours,
+      ggplot2::aes(z = .data$density, colour = "Parasite", linetype = "50% density"),
+      breaks = parasite_half_density,
+      linewidth = 0.48
     ) +
     ggplot2::scale_fill_manual(
       values = c(
@@ -1185,12 +1198,16 @@ plot_niche_dynamics_pair <- function(row, grids) {
         "Parasite-only non-analog" = "#FDE0C5",
         "Other available environment" = "#F2F2F2"
       ),
-      drop = FALSE,
+      drop = TRUE,
       name = "Dynamic category"
     ) +
     ggplot2::scale_colour_manual(
-      values = c("Host niche density" = "#08519C", "Parasite niche density" = "#E6550D"),
-      name = "Density contour"
+      values = c("Host" = "#08519C", "Parasite" = "#E6550D"),
+      name = "Niche outline"
+    ) +
+    ggplot2::scale_linetype_manual(
+      values = c("Full available niche" = "solid", "50% density" = "22"),
+      name = "Contour"
     ) +
     ggplot2::coord_equal(expand = FALSE) +
     ggplot2::labs(
@@ -1213,14 +1230,24 @@ plot_niche_dynamics_pair <- function(row, grids) {
     )
 }
 
-# Use positive density levels for niche contour overlays. Empty or flat density
-# rasters return no breaks, allowing the main dynamic map to render.
-density_contour_breaks <- function(x, n = 4) {
+# Prepare a binary full-available-niche surface and a density surface for the
+# two contour lines requested in pair-specific niche dynamics figures.
+niche_contour_df <- function(raster) {
+  raster_to_plot_df(raster, "density") |>
+    dplyr::mutate(
+      density = tidyr::replace_na(.data$density, 0),
+      available = as.integer(.data$density > 0)
+    )
+}
+
+# Use one dashed contour at 50% of the maximum density. Empty or flat density
+# rasters return no breaks, allowing the dynamic map to render without warnings.
+half_density_break <- function(x) {
   max_density <- suppressWarnings(max(x, na.rm = TRUE))
   if (!is.finite(max_density) || max_density <= 0) {
     return(numeric(0))
   }
-  seq(max_density / (n + 1), max_density * n / (n + 1), length.out = n)
+  max_density * 0.5
 }
 
 # Save ggplot2 niche dynamic plots for every analyzed pair.
@@ -1336,6 +1363,10 @@ write_modification_log <- function(project_dir, run_settings, validation, pairs)
     "- Uses all candidate parasite-host combinations that pass the minimum cleaned occurrence threshold unless `Data/parasite_host_pairs.csv` is supplied.",
     "- Keeps the Broennimann et al. environmental PCA and ecospat density-grid approach, but automates it for all valid pairs.",
     "- Adds parasite-host terminology for stability, parasite-exclusive environmental use, and host environmental space unfilled by the parasite.",
+    "- Enables randomization-based niche equivalency and directional niche similarity tests with fixed seeds and ecospat-level parallel workers.",
+    "- Revises pair-specific niche dynamics figures to use solid full-available-niche outlines and dashed 50% density contours rather than multiple density contour levels.",
+    "- Revises the supplementary PDF to expose reproducibility-relevant analytical code while hiding PDF table styling and other presentational infrastructure.",
+    "- Displays reported data objects before formatted tables so readers can identify the summarized objects without seeing table-formatting helper calls.",
     "- Saves figures under `Figures/`, pair-specific niche-space plots under `Figures/Niche_Plots/`, analytical tables and null-model outputs under `Results/tables/`, validation outputs under `Results/validation/`, and R objects under `Results/objects/`.",
     "- Produces publication-oriented occurrence maps, background maps, PCA loading plots, Schoener's D heatmaps, niche dynamics stacked bars, and pair-specific ggplot2 niche dynamics figures.",
     "",
